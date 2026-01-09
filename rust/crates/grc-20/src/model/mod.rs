@@ -5,12 +5,15 @@
 //! - Values (typed property instances)
 //! - Operations (state changes)
 //! - Edits (batched operations)
+//! - Builders (ergonomic construction)
 
+pub mod builder;
 pub mod edit;
 pub mod id;
 pub mod op;
 pub mod value;
 
+pub use builder::{EditBuilder, EntityBuilder, RelationBuilder, UpdateEntityBuilder};
 pub use edit::{DictionaryBuilder, Edit, WireDictionaries};
 pub use id::{derived_uuid, format_id, parse_id, text_value_id, unique_relation_id, value_id, Id, NIL_ID};
 pub use op::{

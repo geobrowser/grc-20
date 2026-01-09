@@ -565,7 +565,7 @@ fn encode_op_canonical(
     match op {
         Op::CreateEntity(ce) => {
             // Sort values by (property_index, language_index) and check for duplicates
-            let sorted_values = sort_and_check_values(&ce.values, dict_builder, property_types)?;
+            let sorted_values = sort_and_check_values(&ce.values, dict_builder)?;
 
             writer.write_byte(1); // OP_CREATE_ENTITY
             writer.write_id(&ce.id);
@@ -581,7 +581,7 @@ fn encode_op_canonical(
         }
         Op::UpdateEntity(ue) => {
             // Sort set_properties and unset_properties, check for duplicates
-            let sorted_set = sort_and_check_values(&ue.set_properties, dict_builder, property_types)?;
+            let sorted_set = sort_and_check_values(&ue.set_properties, dict_builder)?;
             let sorted_unset = sort_and_check_unsets(&ue.unset_properties, dict_builder)?;
 
             writer.write_byte(2); // OP_UPDATE_ENTITY
@@ -608,11 +608,11 @@ fn encode_op_canonical(
             }
 
             if !sorted_unset.is_empty() {
+                use crate::model::UnsetLanguage;
                 writer.write_varint(sorted_unset.len() as u64);
                 for unset in &sorted_unset {
-                    use crate::model::UnsetLanguage;
-                    let idx = dict_builder.add_property(unset.property, DataType::Bool);
-                    writer.write_varint(idx as u64);
+                    let prop_idx = dict_builder.add_property(unset.property, DataType::Bool);
+                    writer.write_varint(prop_idx as u64);
                     let lang_value: u32 = match &unset.language {
                         UnsetLanguage::All => 0xFFFFFFFF,
                         UnsetLanguage::NonLinguistic => 0,
@@ -634,7 +634,6 @@ fn encode_op_canonical(
 fn sort_and_check_values<'a>(
     values: &[crate::model::PropertyValue<'a>],
     dict_builder: &DictionaryBuilder,
-    _property_types: &FxHashMap<Id, DataType>,
 ) -> Result<Vec<crate::model::PropertyValue<'a>>, EncodeError> {
     use crate::model::{PropertyValue, Value};
 
@@ -657,12 +656,7 @@ fn sort_and_check_values<'a>(
         .collect();
 
     // Sort by (property_index, language_index)
-    indexed.sort_by(|a, b| {
-        match a.0.cmp(&b.0) {
-            std::cmp::Ordering::Equal => a.1.cmp(&b.1),
-            other => other,
-        }
-    });
+    indexed.sort_by(|a, b| (a.0, a.1).cmp(&(b.0, b.1)));
 
     // Check for duplicates (adjacent entries with same property_index and language_index)
     for i in 1..indexed.len() {
@@ -695,7 +689,6 @@ fn sort_and_check_unsets(
     }
 
     // Create (property_index, language_sort_key, original_index) tuples for sorting
-    // Language sort key: 0xFFFFFFFF for All, 0 for NonLinguistic, language_index for Specific
     let mut indexed: Vec<(usize, u32, usize, &crate::model::UnsetProperty)> = unsets
         .iter()
         .enumerate()
@@ -713,12 +706,7 @@ fn sort_and_check_unsets(
         .collect();
 
     // Sort by (property_index, language_key)
-    indexed.sort_by(|a, b| {
-        match a.0.cmp(&b.0) {
-            std::cmp::Ordering::Equal => a.1.cmp(&b.1),
-            other => other,
-        }
-    });
+    indexed.sort_by(|a, b| (a.0, a.1).cmp(&(b.0, b.1)));
 
     // Check for duplicates
     for i in 1..indexed.len() {
