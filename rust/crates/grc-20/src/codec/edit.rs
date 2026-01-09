@@ -3,8 +3,9 @@
 //! Implements the wire format for edits (spec Section 6.3).
 
 use std::borrow::Cow;
-use std::collections::HashMap;
 use std::io::Read;
+
+use rustc_hash::FxHashMap;
 
 use crate::codec::op::{decode_op, encode_op};
 use crate::codec::primitives::{Reader, Writer};
@@ -13,9 +14,7 @@ use crate::limits::{
     FORMAT_VERSION, MAGIC_COMPRESSED, MAGIC_UNCOMPRESSED, MAX_AUTHORS, MAX_DICT_SIZE,
     MAX_EDIT_SIZE, MAX_OPS_PER_EDIT, MAX_STRING_LEN,
 };
-use crate::model::{
-    DataType, DictionaryBuilder, Edit, Id, Op, PropertyValue, Value, WireDictionaries,
-};
+use crate::model::{DataType, DictionaryBuilder, Edit, Id, Op, WireDictionaries};
 
 // =============================================================================
 // DECODING
@@ -163,13 +162,29 @@ fn decompress_zstd(compressed: &[u8]) -> Result<Vec<u8>, DecodeError> {
 // =============================================================================
 
 /// Encodes an Edit to binary format (uncompressed).
+///
+/// Uses single-pass encoding: ops are encoded to a buffer while building
+/// dictionaries, then the final output is assembled.
 pub fn encode_edit(edit: &Edit) -> Result<Vec<u8>, EncodeError> {
-    // First pass: collect all IDs and build dictionaries
-    let (dict_builder, property_types) = collect_edit_ids(edit);
-    let dicts = dict_builder.build();
+    // Build property type map from CreateProperty ops
+    let mut property_types: FxHashMap<Id, DataType> = FxHashMap::default();
+    for op in &edit.ops {
+        if let Op::CreateProperty(cp) = op {
+            property_types.insert(cp.id, cp.data_type);
+        }
+    }
 
-    // Second pass: encode
-    let mut writer = Writer::with_capacity(estimate_edit_size(edit));
+    // Single pass: encode ops while building dictionaries
+    let mut dict_builder = DictionaryBuilder::with_capacity(edit.ops.len());
+    let mut ops_writer = Writer::with_capacity(edit.ops.len() * 50);
+
+    for op in &edit.ops {
+        encode_op(&mut ops_writer, op, &mut dict_builder, &property_types)?;
+    }
+
+    // Now assemble final output: header + dictionaries + ops
+    let ops_bytes = ops_writer.into_bytes();
+    let mut writer = Writer::with_capacity(256 + ops_bytes.len());
 
     // Magic and version
     writer.write_bytes(MAGIC_UNCOMPRESSED);
@@ -181,41 +196,69 @@ pub fn encode_edit(edit: &Edit) -> Result<Vec<u8>, EncodeError> {
     writer.write_id_vec(&edit.authors);
     writer.write_signed_varint(edit.created_at);
 
-    // Schema dictionaries
-    writer.write_varint(dicts.properties.len() as u64);
-    for (id, data_type) in &dicts.properties {
-        writer.write_id(id);
-        writer.write_byte(*data_type as u8);
-    }
+    // Dictionaries
+    dict_builder.write_dictionaries(&mut writer);
 
-    writer.write_id_vec(&dicts.relation_types);
-    writer.write_id_vec(&dicts.languages);
-    writer.write_id_vec(&dicts.objects);
-
-    // Operations
+    // Operations (already encoded)
     writer.write_varint(edit.ops.len() as u64);
-
-    // Re-create dict_builder for encoding (to get correct indices)
-    let mut dict_builder = DictionaryBuilder::new();
-    // Pre-populate with the same order
-    for (id, data_type) in &dicts.properties {
-        dict_builder.add_property(*id, *data_type);
-    }
-    for id in &dicts.relation_types {
-        dict_builder.add_relation_type(*id);
-    }
-    for id in &dicts.languages {
-        dict_builder.add_language(Some(*id));
-    }
-    for id in &dicts.objects {
-        dict_builder.add_object(*id);
-    }
-
-    for op in &edit.ops {
-        encode_op(&mut writer, op, &mut dict_builder, &property_types)?;
-    }
+    writer.write_bytes(&ops_bytes);
 
     Ok(writer.into_bytes())
+}
+
+/// Encodes an Edit with profiling output (two-pass for comparison).
+pub fn encode_edit_profiled(edit: &Edit, profile: bool) -> Result<Vec<u8>, EncodeError> {
+    if !profile {
+        return encode_edit(edit);
+    }
+
+    use std::time::Instant;
+
+    let t0 = Instant::now();
+
+    // Build property type map
+    let mut property_types: FxHashMap<Id, DataType> = FxHashMap::default();
+    for op in &edit.ops {
+        if let Op::CreateProperty(cp) = op {
+            property_types.insert(cp.id, cp.data_type);
+        }
+    }
+    let t1 = Instant::now();
+
+    // Single pass: encode ops while building dictionaries
+    let mut dict_builder = DictionaryBuilder::with_capacity(edit.ops.len());
+    let mut ops_writer = Writer::with_capacity(edit.ops.len() * 50);
+
+    for op in &edit.ops {
+        encode_op(&mut ops_writer, op, &mut dict_builder, &property_types)?;
+    }
+    let t2 = Instant::now();
+
+    // Assemble final output
+    let ops_bytes = ops_writer.into_bytes();
+    let mut writer = Writer::with_capacity(256 + ops_bytes.len());
+
+    writer.write_bytes(MAGIC_UNCOMPRESSED);
+    writer.write_byte(FORMAT_VERSION);
+    writer.write_id(&edit.id);
+    writer.write_string(&edit.name);
+    writer.write_id_vec(&edit.authors);
+    writer.write_signed_varint(edit.created_at);
+    dict_builder.write_dictionaries(&mut writer);
+    writer.write_varint(edit.ops.len() as u64);
+    writer.write_bytes(&ops_bytes);
+    let t3 = Instant::now();
+
+    let result = writer.into_bytes();
+
+    let total = t3.duration_since(t0);
+    eprintln!("=== Encode Profile (single-pass) ===");
+    eprintln!("  build property_types: {:?} ({:.1}%)", t1.duration_since(t0), 100.0 * t1.duration_since(t0).as_secs_f64() / total.as_secs_f64());
+    eprintln!("  encode_ops + build_dicts: {:?} ({:.1}%)", t2.duration_since(t1), 100.0 * t2.duration_since(t1).as_secs_f64() / total.as_secs_f64());
+    eprintln!("  assemble output: {:?} ({:.1}%)", t3.duration_since(t2), 100.0 * t3.duration_since(t2).as_secs_f64() / total.as_secs_f64());
+    eprintln!("  TOTAL: {:?}", total);
+
+    Ok(result)
 }
 
 /// Encodes an Edit to binary format with zstd compression.
@@ -231,79 +274,6 @@ pub fn encode_edit_compressed(edit: &Edit, level: i32) -> Result<Vec<u8>, Encode
     writer.write_bytes(&compressed);
 
     Ok(writer.into_bytes())
-}
-
-/// Collects all IDs from an edit and builds the dictionaries.
-fn collect_edit_ids(edit: &Edit) -> (DictionaryBuilder, HashMap<Id, DataType>) {
-    let mut builder = DictionaryBuilder::new();
-    let mut property_types: HashMap<Id, DataType> = HashMap::new();
-
-    for op in &edit.ops {
-        match op {
-            Op::CreateEntity(ce) => {
-                collect_property_values(&ce.values, &mut builder, &mut property_types);
-            }
-            Op::UpdateEntity(ue) => {
-                builder.add_object(ue.id);
-                collect_property_values(&ue.set_properties, &mut builder, &mut property_types);
-                collect_property_values(&ue.add_values, &mut builder, &mut property_types);
-                collect_property_values(&ue.remove_values, &mut builder, &mut property_types);
-                for prop_id in &ue.unset_properties {
-                    // For unset, we don't know the type, use a placeholder
-                    builder.add_property(*prop_id, DataType::Bool);
-                }
-            }
-            Op::DeleteEntity(de) => {
-                builder.add_object(de.id);
-            }
-            Op::CreateRelation(cr) => {
-                builder.add_relation_type(cr.relation_type);
-                builder.add_object(cr.from);
-                builder.add_object(cr.to);
-            }
-            Op::UpdateRelation(ur) => {
-                builder.add_object(ur.id);
-            }
-            Op::DeleteRelation(dr) => {
-                builder.add_object(dr.id);
-            }
-            Op::CreateProperty(cp) => {
-                property_types.insert(cp.id, cp.data_type);
-            }
-        }
-    }
-
-    (builder, property_types)
-}
-
-fn collect_property_values(
-    values: &[PropertyValue],
-    builder: &mut DictionaryBuilder,
-    property_types: &mut HashMap<Id, DataType>,
-) {
-    for pv in values {
-        let data_type = property_types
-            .get(&pv.property)
-            .copied()
-            .unwrap_or_else(|| pv.value.data_type());
-        builder.add_property(pv.property, data_type);
-        property_types.insert(pv.property, data_type);
-
-        // Collect language for TEXT values
-        if let Value::Text { language, .. } = &pv.value {
-            builder.add_language(*language);
-        }
-
-        // Collect REF targets
-        if let Value::Ref(id) = &pv.value {
-            builder.add_object(*id);
-        }
-    }
-}
-
-fn estimate_edit_size(edit: &Edit) -> usize {
-    // Rough estimate: 1KB base + 100 bytes per op
-    1024 + edit.ops.len() * 100
 }
 
 #[cfg(test)]

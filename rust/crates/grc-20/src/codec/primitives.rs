@@ -47,6 +47,7 @@ impl<'a> Reader<'a> {
     }
 
     /// Reads a single byte.
+    #[inline]
     pub fn read_byte(&mut self, context: &'static str) -> Result<u8, DecodeError> {
         if self.pos >= self.data.len() {
             return Err(DecodeError::UnexpectedEof { context });
@@ -57,6 +58,7 @@ impl<'a> Reader<'a> {
     }
 
     /// Reads exactly n bytes.
+    #[inline]
     pub fn read_bytes(&mut self, n: usize, context: &'static str) -> Result<&'a [u8], DecodeError> {
         if self.pos + n > self.data.len() {
             return Err(DecodeError::UnexpectedEof { context });
@@ -67,14 +69,15 @@ impl<'a> Reader<'a> {
     }
 
     /// Reads a 16-byte UUID.
+    #[inline]
     pub fn read_id(&mut self, context: &'static str) -> Result<Id, DecodeError> {
         let bytes = self.read_bytes(16, context)?;
-        let mut id = [0u8; 16];
-        id.copy_from_slice(bytes);
-        Ok(id)
+        // SAFETY: read_bytes guarantees exactly 16 bytes, try_into always succeeds
+        Ok(bytes.try_into().unwrap())
     }
 
     /// Reads an unsigned varint (LEB128).
+    #[inline]
     pub fn read_varint(&mut self, context: &'static str) -> Result<u64, DecodeError> {
         let mut result: u64 = 0;
         let mut shift = 0;
@@ -110,6 +113,7 @@ impl<'a> Reader<'a> {
     }
 
     /// Reads a length-prefixed UTF-8 string.
+    #[inline]
     pub fn read_string(
         &mut self,
         max_len: usize,
@@ -124,7 +128,10 @@ impl<'a> Reader<'a> {
             });
         }
         let bytes = self.read_bytes(len, field)?;
-        String::from_utf8(bytes.to_vec()).map_err(|_| DecodeError::InvalidUtf8 { field })
+        // Validate UTF-8 on borrowed slice, then allocate once (avoids intermediate Vec)
+        std::str::from_utf8(bytes)
+            .map(|s| s.to_string())
+            .map_err(|_| DecodeError::InvalidUtf8 { field })
     }
 
     /// Reads a length-prefixed byte array.
@@ -146,11 +153,11 @@ impl<'a> Reader<'a> {
     }
 
     /// Reads a little-endian f64.
+    #[inline]
     pub fn read_f64(&mut self, context: &'static str) -> Result<f64, DecodeError> {
         let bytes = self.read_bytes(8, context)?;
-        let value = f64::from_le_bytes([
-            bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
-        ]);
+        // SAFETY: read_bytes guarantees exactly 8 bytes, try_into always succeeds
+        let value = f64::from_le_bytes(bytes.try_into().unwrap());
         if value.is_nan() {
             return Err(DecodeError::FloatIsNan);
         }
@@ -158,11 +165,11 @@ impl<'a> Reader<'a> {
     }
 
     /// Reads a little-endian f64 without NaN check.
+    #[inline]
     pub fn read_f64_unchecked(&mut self, context: &'static str) -> Result<f64, DecodeError> {
         let bytes = self.read_bytes(8, context)?;
-        Ok(f64::from_le_bytes([
-            bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
-        ]))
+        // SAFETY: read_bytes guarantees exactly 8 bytes, try_into always succeeds
+        Ok(f64::from_le_bytes(bytes.try_into().unwrap()))
     }
 
     /// Reads a vector of IDs with length prefix.
@@ -231,33 +238,42 @@ impl Writer {
     }
 
     /// Writes a single byte.
+    #[inline]
     pub fn write_byte(&mut self, byte: u8) {
         self.buf.push(byte);
     }
 
     /// Writes raw bytes.
+    #[inline]
     pub fn write_bytes(&mut self, bytes: &[u8]) {
         self.buf.extend_from_slice(bytes);
     }
 
     /// Writes a 16-byte UUID.
+    #[inline]
     pub fn write_id(&mut self, id: &Id) {
         self.buf.extend_from_slice(id);
     }
 
     /// Writes an unsigned varint (LEB128).
+    #[inline]
     pub fn write_varint(&mut self, mut value: u64) {
+        // Use stack buffer to batch writes (faster than multiple push calls)
+        let mut buf = [0u8; 10]; // Max 10 bytes for 64-bit varint
+        let mut len = 0;
         loop {
             let mut byte = (value & 0x7F) as u8;
             value >>= 7;
             if value != 0 {
                 byte |= 0x80;
             }
-            self.buf.push(byte);
+            buf[len] = byte;
+            len += 1;
             if value == 0 {
                 break;
             }
         }
+        self.buf.extend_from_slice(&buf[..len]);
     }
 
     /// Writes a signed varint (zigzag encoded).

@@ -160,7 +160,7 @@ ISO 8601 format for **calendar dates with variable precision**. Use DATE for sem
 
 **DATE vs TIMESTAMP:** DATE preserves the original precision and is stored as a string. TIMESTAMP is always microsecond-precision UTC stored as an integer. A birthday is a DATE ("1990-05-20"); a login event is a TIMESTAMP.
 
-**Sorting (NORMATIVE):** Indexers MUST parse DATE strings into a numeric representation for sorting. Lexicographical string sorting does NOT work for BCE years. Dates with different precisions sort by their earliest possible instant.
+**Sorting (NORMATIVE):** Indexers MUST parse DATE strings into a numeric representation for sorting. Lexicographical string sorting does NOT work for BCE years. Dates with different precisions sort by their earliest possible instant; when two dates resolve to the same instant, the more precise date sorts before the less precise (e.g., `2024-01-01` < `2024-01` < `2024`).
 
 **Validation (NORMATIVE):** DATE strings MUST conform to ISO 8601 calendar date format. Full datetime with timezone (e.g., "2024-03-15T14:30Z") SHOULD use TIMESTAMP instead. Implementations SHOULD reject clearly malformed dates (e.g., month 13, day 32) but MAY defer full validation to the application layer.
 
@@ -207,6 +207,8 @@ EMBEDDING {
 |---------|------|----------|---------|
 | REF | Property value | Metadata pointer: `unit: kg` | By value only |
 | Relation | Directed edge | Graph edge: `Alice knows Bob` | Forward and reverse |
+
+**When to choose:** Use REF for lightweight, non-traversable references where reverse lookup is not needed (e.g., unit of measurement, currency, category tags). Use Relation when you need bidirectional graph traversal (e.g., "find all books by this author"). REF is a property value; Relation is a first-class graph edge with its own reified entity.
 
 ### 2.5 Values
 
@@ -297,6 +299,8 @@ Where each component is the raw 16-byte UUID. Space hints and entity are NOT inc
 
 **Entity ID in unique mode:** The `entity` field is always caller-provided (not derived). If a unique-mode relation already exists, the entire CreateRelation op is ignored, including the entity field. This means the first creator determines the reified entity ID.
 
+**Unique mode client responsibility (NORMATIVE):** When two clients concurrently create the same unique-mode relation with different entity IDs, only the first-committed op establishes the reified entity. Clients submitting `CreateRelation` in unique mode MUST query the resolved state after submission to determine which entity ID was accepted before attaching values to it. Failure to do so may result in orphaned values on a disconnected entity.
+
 **Ordering:**
 
 Use `position` with fractional indexing. Positions are strings from alphabet `0-9A-Za-z` (62 characters, ASCII order).
@@ -311,7 +315,7 @@ midpoint("a", "z") = "n"
 midpoint("a", "b") = "aV"
 ```
 
-Maximum position length: 64 characters. Rebalance when any position exceeds 32 characters.
+**Maximum length (NORMATIVE):** Position strings MUST NOT exceed 64 characters. If a client cannot generate a midpoint without exceeding this limit (positions too close), it MUST perform explicit reordering by issuing `UpdateRelation` ops with new, evenly-spaced positions. This protocol does not support implicit rebalancing.
 
 **Position validation (NORMATIVE):** Positions containing characters outside `0-9A-Za-z` or exceeding 64 characters MUST be rejected (E005).
 

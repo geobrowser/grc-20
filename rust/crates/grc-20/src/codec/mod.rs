@@ -7,6 +7,6 @@ pub mod op;
 pub mod primitives;
 pub mod value;
 
-pub use edit::{decode_edit, encode_edit, encode_edit_compressed};
+pub use edit::{decode_edit, encode_edit, encode_edit_compressed, encode_edit_profiled};
 pub use primitives::{Reader, Writer, zigzag_decode, zigzag_encode};
 pub use value::{canonical_payload, decode_value, encode_value};

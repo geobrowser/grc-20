@@ -357,7 +357,7 @@ pub fn encode_op(
     writer: &mut Writer,
     op: &Op,
     dict_builder: &mut DictionaryBuilder,
-    property_types: &std::collections::HashMap<crate::model::Id, DataType>,
+    property_types: &rustc_hash::FxHashMap<crate::model::Id, DataType>,
 ) -> Result<(), EncodeError> {
     match op {
         Op::CreateEntity(ce) => encode_create_entity(writer, ce, dict_builder, property_types),
@@ -374,7 +374,7 @@ fn encode_create_entity(
     writer: &mut Writer,
     ce: &CreateEntity,
     dict_builder: &mut DictionaryBuilder,
-    property_types: &std::collections::HashMap<crate::model::Id, DataType>,
+    property_types: &rustc_hash::FxHashMap<crate::model::Id, DataType>,
 ) -> Result<(), EncodeError> {
     writer.write_byte(OP_CREATE_ENTITY);
     writer.write_id(&ce.id);
@@ -394,7 +394,7 @@ fn encode_update_entity(
     writer: &mut Writer,
     ue: &UpdateEntity,
     dict_builder: &mut DictionaryBuilder,
-    property_types: &std::collections::HashMap<crate::model::Id, DataType>,
+    property_types: &rustc_hash::FxHashMap<crate::model::Id, DataType>,
 ) -> Result<(), EncodeError> {
     writer.write_byte(OP_UPDATE_ENTITY);
 
@@ -600,7 +600,7 @@ mod tests {
         });
 
         let mut dict_builder = DictionaryBuilder::new();
-        let mut property_types = std::collections::HashMap::new();
+        let mut property_types = rustc_hash::FxHashMap::default();
         property_types.insert([2u8; 16], DataType::Text);
 
         let mut writer = Writer::new();
@@ -627,7 +627,7 @@ mod tests {
         });
 
         let mut dict_builder = DictionaryBuilder::new();
-        let property_types = std::collections::HashMap::new();
+        let property_types = rustc_hash::FxHashMap::default();
 
         let mut writer = Writer::new();
         encode_op(&mut writer, &op, &mut dict_builder, &property_types).unwrap();
@@ -653,7 +653,7 @@ mod tests {
         });
 
         let mut dict_builder = DictionaryBuilder::new();
-        let property_types = std::collections::HashMap::new();
+        let property_types = rustc_hash::FxHashMap::default();
 
         let mut writer = Writer::new();
         encode_op(&mut writer, &op, &mut dict_builder, &property_types).unwrap();
@@ -673,7 +673,7 @@ mod tests {
         });
 
         let mut dict_builder = DictionaryBuilder::new();
-        let property_types = std::collections::HashMap::new();
+        let property_types = rustc_hash::FxHashMap::default();
 
         let mut writer = Writer::new();
         encode_op(&mut writer, &op, &mut dict_builder, &property_types).unwrap();

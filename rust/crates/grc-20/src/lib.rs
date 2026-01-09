@@ -77,7 +77,7 @@ pub mod model;
 pub mod validate;
 
 // Re-export commonly used types at crate root
-pub use codec::{decode_edit, encode_edit, encode_edit_compressed};
+pub use codec::{decode_edit, encode_edit, encode_edit_compressed, encode_edit_profiled};
 pub use error::{DecodeError, EncodeError, ValidationError};
 pub use model::{
     CreateEntity, CreateProperty, CreateRelation, DataType, DecimalMantissa, DeleteEntity,

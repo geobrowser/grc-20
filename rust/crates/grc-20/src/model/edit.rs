@@ -2,6 +2,9 @@
 //!
 //! Edits are standalone patches containing a batch of ops with metadata.
 
+use rustc_hash::FxHashMap;
+
+use crate::codec::primitives::Writer;
 use crate::model::{DataType, Id, Op};
 
 /// A batch of operations with metadata (spec Section 4.1).
@@ -97,22 +100,49 @@ impl WireDictionaries {
 }
 
 /// Builder for constructing wire dictionaries during encoding.
+///
+/// Uses FxHashMap for faster hashing of 16-byte IDs.
 #[derive(Debug, Clone, Default)]
 pub struct DictionaryBuilder {
     properties: Vec<(Id, DataType)>,
-    property_indices: std::collections::HashMap<Id, usize>,
+    property_indices: FxHashMap<Id, usize>,
     relation_types: Vec<Id>,
-    relation_type_indices: std::collections::HashMap<Id, usize>,
+    relation_type_indices: FxHashMap<Id, usize>,
     languages: Vec<Id>,
-    language_indices: std::collections::HashMap<Id, usize>,
+    language_indices: FxHashMap<Id, usize>,
     objects: Vec<Id>,
-    object_indices: std::collections::HashMap<Id, usize>,
+    object_indices: FxHashMap<Id, usize>,
 }
 
 impl DictionaryBuilder {
     /// Creates a new empty builder.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Creates a new builder with pre-allocated capacity.
+    ///
+    /// `estimated_ops` is used to estimate dictionary sizes:
+    /// - properties: ~estimated_ops / 4 (entities average ~4 properties)
+    /// - relation_types: ~estimated_ops / 20 (fewer unique relation types)
+    /// - languages: 4 (typically few languages per edit)
+    /// - objects: ~estimated_ops / 2 (many ops reference existing objects)
+    pub fn with_capacity(estimated_ops: usize) -> Self {
+        let prop_cap = estimated_ops / 4 + 1;
+        let rel_cap = estimated_ops / 20 + 1;
+        let lang_cap = 4;
+        let obj_cap = estimated_ops / 2 + 1;
+
+        Self {
+            properties: Vec::with_capacity(prop_cap),
+            property_indices: FxHashMap::with_capacity_and_hasher(prop_cap, Default::default()),
+            relation_types: Vec::with_capacity(rel_cap),
+            relation_type_indices: FxHashMap::with_capacity_and_hasher(rel_cap, Default::default()),
+            languages: Vec::with_capacity(lang_cap),
+            language_indices: FxHashMap::with_capacity_and_hasher(lang_cap, Default::default()),
+            objects: Vec::with_capacity(obj_cap),
+            object_indices: FxHashMap::with_capacity_and_hasher(obj_cap, Default::default()),
+        }
     }
 
     /// Adds or gets the index for a property.
@@ -170,7 +200,7 @@ impl DictionaryBuilder {
         }
     }
 
-    /// Builds the final wire dictionaries.
+    /// Builds the final wire dictionaries (consumes the builder).
     pub fn build(self) -> WireDictionaries {
         WireDictionaries {
             properties: self.properties,
@@ -178,6 +208,60 @@ impl DictionaryBuilder {
             languages: self.languages,
             objects: self.objects,
         }
+    }
+
+    /// Returns a reference to wire dictionaries without consuming the builder.
+    /// This allows continued use of the builder for encoding while having the dictionaries.
+    pub fn as_wire_dicts(&self) -> WireDictionaries {
+        WireDictionaries {
+            properties: self.properties.clone(),
+            relation_types: self.relation_types.clone(),
+            languages: self.languages.clone(),
+            objects: self.objects.clone(),
+        }
+    }
+
+    /// Gets the index for an existing property (for encoding).
+    pub fn get_property_index(&self, id: &Id) -> Option<usize> {
+        self.property_indices.get(id).copied()
+    }
+
+    /// Gets the index for an existing relation type (for encoding).
+    pub fn get_relation_type_index(&self, id: &Id) -> Option<usize> {
+        self.relation_type_indices.get(id).copied()
+    }
+
+    /// Gets the index for an existing language (for encoding).
+    /// Returns 0 for None, 1+ for existing languages.
+    pub fn get_language_index(&self, id: Option<&Id>) -> Option<usize> {
+        match id {
+            None => Some(0),
+            Some(lang_id) => self.language_indices.get(lang_id).map(|idx| idx + 1),
+        }
+    }
+
+    /// Gets the index for an existing object (for encoding).
+    pub fn get_object_index(&self, id: &Id) -> Option<usize> {
+        self.object_indices.get(id).copied()
+    }
+
+    /// Writes the dictionaries directly to a writer (avoids cloning).
+    pub fn write_dictionaries(&self, writer: &mut Writer) {
+        // Properties: count + (id, data_type) pairs
+        writer.write_varint(self.properties.len() as u64);
+        for (id, data_type) in &self.properties {
+            writer.write_id(id);
+            writer.write_byte(*data_type as u8);
+        }
+
+        // Relation types
+        writer.write_id_vec(&self.relation_types);
+
+        // Languages
+        writer.write_id_vec(&self.languages);
+
+        // Objects
+        writer.write_id_vec(&self.objects);
     }
 }
 

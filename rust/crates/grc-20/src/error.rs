@@ -176,6 +176,9 @@ pub enum EncodeError {
 
     #[error("position string length exceeds maximum 64")]
     PositionTooLong,
+
+    #[error("batch entity has {actual} values but schema requires {expected}")]
+    BatchEntityValueCountMismatch { expected: usize, actual: usize },
 }
 
 /// Error during semantic validation.
