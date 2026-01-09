@@ -32,7 +32,8 @@ const FLAG_HAS_FROM_SPACE: u8 = 0x02;
 const FLAG_HAS_FROM_VERSION: u8 = 0x04;
 const FLAG_HAS_TO_SPACE: u8 = 0x08;
 const FLAG_HAS_TO_VERSION: u8 = 0x10;
-const CREATE_RELATION_RESERVED_MASK: u8 = 0xE0;
+const FLAG_HAS_ENTITY: u8 = 0x20;
+const CREATE_RELATION_RESERVED_MASK: u8 = 0xC0;
 
 // UpdateRelation flags (only position is mutable)
 const UPDATE_RELATION_RESERVED_MASK: u8 = 0xFE;
@@ -191,8 +192,6 @@ fn decode_create_relation<'a>(
         }
     };
 
-    let entity = reader.read_id("entity_id")?;
-
     let type_index = reader.read_varint("relation_type")? as usize;
     if type_index >= dicts.relation_types.len() {
         return Err(DecodeError::IndexOutOfBounds {
@@ -232,6 +231,14 @@ fn decode_create_relation<'a>(
         });
     }
 
+    // Validate: unique mode must not have explicit entity
+    let has_entity = flags & FLAG_HAS_ENTITY != 0;
+    if mode == MODE_UNIQUE && has_entity {
+        return Err(DecodeError::MalformedEncoding {
+            context: "unique mode relation cannot have explicit entity",
+        });
+    }
+
     let position = if flags & FLAG_HAS_POSITION != 0 {
         Some(decode_position(reader)?)
     } else {
@@ -258,6 +265,13 @@ fn decode_create_relation<'a>(
 
     let to_version = if flags & FLAG_HAS_TO_VERSION != 0 {
         Some(reader.read_id("to_version")?)
+    } else {
+        None
+    };
+
+    // Entity is read after other optional fields if has_entity flag is set
+    let entity = if has_entity {
+        Some(reader.read_id("entity_id")?)
     } else {
         None
     };
@@ -429,6 +443,13 @@ fn encode_create_relation(
     cr: &CreateRelation<'_>,
     dict_builder: &mut DictionaryBuilder,
 ) -> Result<(), EncodeError> {
+    // Validate: unique mode must not have explicit entity
+    if matches!(cr.id_mode, RelationIdMode::Unique) && cr.entity.is_some() {
+        return Err(EncodeError::InvalidInput {
+            context: "unique mode relation cannot have explicit entity",
+        });
+    }
+
     writer.write_byte(OP_CREATE_RELATION);
 
     match &cr.id_mode {
@@ -440,8 +461,6 @@ fn encode_create_relation(
             writer.write_id(id);
         }
     }
-
-    writer.write_id(&cr.entity);
 
     let type_index = dict_builder.add_relation_type(cr.relation_type);
     writer.write_varint(type_index as u64);
@@ -468,6 +487,9 @@ fn encode_create_relation(
     if cr.to_version.is_some() {
         flags |= FLAG_HAS_TO_VERSION;
     }
+    if cr.entity.is_some() {
+        flags |= FLAG_HAS_ENTITY;
+    }
     writer.write_byte(flags);
 
     if let Some(pos) = &cr.position {
@@ -489,6 +511,11 @@ fn encode_create_relation(
 
     if let Some(version) = &cr.to_version {
         writer.write_id(version);
+    }
+
+    // Entity is written after other optional fields if present
+    if let Some(entity) = &cr.entity {
+        writer.write_id(entity);
     }
 
     Ok(())
@@ -598,12 +625,13 @@ mod tests {
 
     #[test]
     fn test_create_relation_roundtrip() {
+        // Test with explicit entity (instance mode)
         let op = Op::CreateRelation(CreateRelation {
             id_mode: RelationIdMode::Instance([10u8; 16]),
             relation_type: [1u8; 16],
             from: [2u8; 16],
             to: [3u8; 16],
-            entity: [4u8; 16],
+            entity: Some([4u8; 16]),
             position: Some(Cow::Owned("abc".to_string())),
             from_space: None,
             from_version: None,
@@ -640,13 +668,54 @@ mod tests {
     }
 
     #[test]
+    fn test_create_relation_auto_entity_roundtrip() {
+        // Test with auto-derived entity (entity = None)
+        let op = Op::CreateRelation(CreateRelation {
+            id_mode: RelationIdMode::Instance([10u8; 16]),
+            relation_type: [1u8; 16],
+            from: [2u8; 16],
+            to: [3u8; 16],
+            entity: None,
+            position: Some(Cow::Owned("abc".to_string())),
+            from_space: None,
+            from_version: None,
+            to_space: None,
+            to_version: None,
+        });
+
+        let mut dict_builder = DictionaryBuilder::new();
+        let property_types = rustc_hash::FxHashMap::default();
+
+        let mut writer = Writer::new();
+        encode_op(&mut writer, &op, &mut dict_builder, &property_types).unwrap();
+
+        let dicts = dict_builder.build();
+        let mut reader = Reader::new(writer.as_bytes());
+        let decoded = decode_op(&mut reader, &dicts).unwrap();
+
+        match (&op, &decoded) {
+            (Op::CreateRelation(r1), Op::CreateRelation(r2)) => {
+                assert_eq!(r1.id_mode, r2.id_mode);
+                assert_eq!(r1.relation_type, r2.relation_type);
+                assert_eq!(r1.from, r2.from);
+                assert_eq!(r1.to, r2.to);
+                assert_eq!(r1.entity, r2.entity);
+                assert!(r1.entity.is_none());
+                assert!(r2.entity.is_none());
+            }
+            _ => panic!("expected CreateRelation"),
+        }
+    }
+
+    #[test]
     fn test_unique_mode_relation() {
+        // Unique mode must use auto-derived entity (entity = None)
         let op = Op::CreateRelation(CreateRelation {
             id_mode: RelationIdMode::Unique,
             relation_type: [1u8; 16],
             from: [2u8; 16],
             to: [3u8; 16],
-            entity: [4u8; 16],
+            entity: None,
             position: None,
             from_space: None,
             from_version: None,
@@ -672,9 +741,41 @@ mod tests {
                 assert_eq!(r1.from, r2.from);
                 assert_eq!(r1.to, r2.to);
                 assert_eq!(r1.entity, r2.entity);
+                assert!(r1.entity.is_none());
                 assert!(r1.position.is_none() && r2.position.is_none());
             }
             _ => panic!("expected CreateRelation"),
+        }
+    }
+
+    #[test]
+    fn test_unique_mode_with_explicit_entity_rejected() {
+        // Unique mode with explicit entity should be rejected
+        let op = Op::CreateRelation(CreateRelation {
+            id_mode: RelationIdMode::Unique,
+            relation_type: [1u8; 16],
+            from: [2u8; 16],
+            to: [3u8; 16],
+            entity: Some([4u8; 16]), // Invalid: explicit entity in unique mode
+            position: None,
+            from_space: None,
+            from_version: None,
+            to_space: None,
+            to_version: None,
+        });
+
+        let mut dict_builder = DictionaryBuilder::new();
+        let property_types = rustc_hash::FxHashMap::default();
+
+        let mut writer = Writer::new();
+        let result = encode_op(&mut writer, &op, &mut dict_builder, &property_types);
+
+        assert!(result.is_err());
+        match result {
+            Err(crate::error::EncodeError::InvalidInput { context }) => {
+                assert!(context.contains("unique mode"));
+            }
+            _ => panic!("expected InvalidInput error"),
         }
     }
 
@@ -685,7 +786,7 @@ mod tests {
             relation_type: [1u8; 16],
             from: [2u8; 16],
             to: [3u8; 16],
-            entity: [4u8; 16],
+            entity: Some([4u8; 16]),
             position: Some(Cow::Owned("abc".to_string())),
             from_space: Some([5u8; 16]),
             from_version: Some([6u8; 16]),

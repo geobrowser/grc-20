@@ -82,6 +82,24 @@ pub fn unique_relation_id(from_id: &Id, to_id: &Id, type_id: &Id) -> Id {
     derived_uuid(&input)
 }
 
+/// Domain separator prefix for relation entity derivation.
+const RELATION_ENTITY_PREFIX: &[u8] = b"grc20:relation-entity:";
+
+/// Derives the reified entity ID from a relation ID.
+///
+/// ```text
+/// entity_id = derived_uuid("grc20:relation-entity:" || relation_id)
+/// ```
+///
+/// This is used when no explicit entity ID is provided in CreateRelation,
+/// ensuring deterministic entity IDs for both unique and instance mode relations.
+pub fn relation_entity_id(relation_id: &Id) -> Id {
+    let mut input = Vec::with_capacity(RELATION_ENTITY_PREFIX.len() + 16);
+    input.extend_from_slice(RELATION_ENTITY_PREFIX);
+    input.extend_from_slice(relation_id);
+    derived_uuid(&input)
+}
+
 /// Formats a UUID as non-hyphenated lowercase hex (recommended display format).
 pub fn format_id(id: &Id) -> String {
     let mut s = String::with_capacity(32);
@@ -161,5 +179,27 @@ mod tests {
         // Different inputs produce different IDs
         let id3 = unique_relation_id(&to, &from, &type_id);
         assert_ne!(id1, id3);
+    }
+
+    #[test]
+    fn test_relation_entity_id() {
+        let rel_id = [1u8; 16];
+
+        // Deterministic
+        let entity1 = relation_entity_id(&rel_id);
+        let entity2 = relation_entity_id(&rel_id);
+        assert_eq!(entity1, entity2);
+
+        // Different relation IDs produce different entity IDs
+        let rel_id2 = [2u8; 16];
+        let entity3 = relation_entity_id(&rel_id2);
+        assert_ne!(entity1, entity3);
+
+        // Entity ID is different from relation ID
+        assert_ne!(entity1, rel_id);
+
+        // Verify it's a valid UUIDv8
+        assert_eq!(entity1[6] & 0xF0, 0x80);
+        assert_eq!(entity1[8] & 0xC0, 0x80);
     }
 }

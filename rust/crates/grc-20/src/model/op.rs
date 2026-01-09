@@ -130,8 +130,10 @@ pub struct CreateRelation<'a> {
     pub from: Id,
     /// Target entity ID.
     pub to: Id,
-    /// The reified entity ID for this relation.
-    pub entity: Id,
+    /// Explicit reified entity ID (instance mode only).
+    /// If None, entity ID is auto-derived from the relation ID.
+    /// Must be None in unique mode.
+    pub entity: Option<Id>,
     /// Optional ordering position (fractional indexing).
     pub position: Option<Cow<'a, str>>,
     /// Optional space hint for source entity.
@@ -155,6 +157,23 @@ impl CreateRelation<'_> {
             RelationIdMode::Instance(id) => *id,
             RelationIdMode::Unique => unique_relation_id(&self.from, &self.to, &self.relation_type),
         }
+    }
+
+    /// Computes the reified entity ID.
+    ///
+    /// If explicit entity is provided, returns it.
+    /// Otherwise, derives it from the relation ID.
+    pub fn entity_id(&self) -> Id {
+        use crate::model::id::relation_entity_id;
+        match self.entity {
+            Some(id) => id,
+            None => relation_entity_id(&self.relation_id()),
+        }
+    }
+
+    /// Returns true if this relation has an explicit entity ID.
+    pub fn has_explicit_entity(&self) -> bool {
+        self.entity.is_some()
     }
 }
 
@@ -265,7 +284,6 @@ mod tests {
         let from = [1u8; 16];
         let to = [2u8; 16];
         let rel_type = [3u8; 16];
-        let entity = [4u8; 16];
 
         // Instance mode returns the provided ID
         let instance_id = [5u8; 16];
@@ -274,7 +292,7 @@ mod tests {
             relation_type: rel_type,
             from,
             to,
-            entity,
+            entity: None,
             position: None,
             from_space: None,
             from_version: None,
@@ -289,7 +307,7 @@ mod tests {
             relation_type: rel_type,
             from,
             to,
-            entity,
+            entity: None,
             position: None,
             from_space: None,
             from_version: None,
@@ -297,5 +315,64 @@ mod tests {
             to_version: None,
         };
         assert_eq!(rel_unique.relation_id(), unique_relation_id(&from, &to, &rel_type));
+    }
+
+    #[test]
+    fn test_entity_id_derivation() {
+        use crate::model::id::relation_entity_id;
+
+        let from = [1u8; 16];
+        let to = [2u8; 16];
+        let rel_type = [3u8; 16];
+        let instance_id = [5u8; 16];
+
+        // Auto-derived entity (entity = None)
+        let rel_auto = CreateRelation {
+            id_mode: RelationIdMode::Instance(instance_id),
+            relation_type: rel_type,
+            from,
+            to,
+            entity: None,
+            position: None,
+            from_space: None,
+            from_version: None,
+            to_space: None,
+            to_version: None,
+        };
+        assert_eq!(rel_auto.entity_id(), relation_entity_id(&instance_id));
+        assert!(!rel_auto.has_explicit_entity());
+
+        // Explicit entity
+        let explicit_entity = [6u8; 16];
+        let rel_explicit = CreateRelation {
+            id_mode: RelationIdMode::Instance(instance_id),
+            relation_type: rel_type,
+            from,
+            to,
+            entity: Some(explicit_entity),
+            position: None,
+            from_space: None,
+            from_version: None,
+            to_space: None,
+            to_version: None,
+        };
+        assert_eq!(rel_explicit.entity_id(), explicit_entity);
+        assert!(rel_explicit.has_explicit_entity());
+
+        // Unique mode with auto entity
+        let rel_unique = CreateRelation {
+            id_mode: RelationIdMode::Unique,
+            relation_type: rel_type,
+            from,
+            to,
+            entity: None,
+            position: None,
+            from_space: None,
+            from_version: None,
+            to_space: None,
+            to_version: None,
+        };
+        let expected_rel_id = rel_unique.relation_id();
+        assert_eq!(rel_unique.entity_id(), relation_entity_id(&expected_rel_id));
     }
 }

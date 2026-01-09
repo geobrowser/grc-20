@@ -279,14 +279,13 @@ impl ConversionContext {
                 }],
             }));
 
-            // Create Types relation
-            let rel_entity_id = make_rel_entity_id(PREFIX_REGION, region_id, 0, 0);
+            // Create Types relation (unique mode uses auto-derived entity)
             self.ops.push(Op::CreateRelation(CreateRelation {
                 id_mode: RelationIdMode::Unique,
                 relation_type: rel_types::TYPES,
                 from: entity_id,
                 to: types::REGION,
-                entity: rel_entity_id,
+                entity: None,
                 position: None,
                 from_space: None,
                 from_version: None,
@@ -312,14 +311,13 @@ impl ConversionContext {
                 }],
             }));
 
-            // Create Types relation
-            let rel_entity_id = make_rel_entity_id(PREFIX_SUBREGION, subregion_id, 0, 0);
+            // Create Types relation (unique mode uses auto-derived entity)
             self.ops.push(Op::CreateRelation(CreateRelation {
                 id_mode: RelationIdMode::Unique,
                 relation_type: rel_types::TYPES,
                 from: entity_id,
                 to: types::SUBREGION,
-                entity: rel_entity_id,
+                entity: None,
                 position: None,
                 from_space: None,
                 from_version: None,
@@ -327,16 +325,15 @@ impl ConversionContext {
                 to_version: None,
             }));
 
-            // Create IN_REGION relation if region is known
+            // Create IN_REGION relation if region is known (unique mode uses auto-derived entity)
             if let Some(rid) = region_id {
                 let region_entity_id = make_entity_id(PREFIX_REGION, rid);
-                let rel_entity_id = make_rel_entity_id(PREFIX_SUBREGION, subregion_id, 1, 0);
                 self.ops.push(Op::CreateRelation(CreateRelation {
                     id_mode: RelationIdMode::Unique,
                     relation_type: rel_types::IN_REGION,
                     from: entity_id,
                     to: region_entity_id,
-                    entity: rel_entity_id,
+                    entity: None,
                     position: None,
                     from_space: None,
                     from_version: None,
@@ -390,14 +387,13 @@ impl ConversionContext {
                 ],
             }));
 
-            // Create Types relation
-            let rel_entity_id = make_timezone_id(&format!("{}:type", tz.zone_name));
+            // Create Types relation (unique mode uses auto-derived entity)
             self.ops.push(Op::CreateRelation(CreateRelation {
                 id_mode: RelationIdMode::Unique,
                 relation_type: rel_types::TYPES,
                 from: entity_id,
                 to: types::TIMEZONE,
-                entity: rel_entity_id,
+                entity: None,
                 position: None,
                 from_space: None,
                 from_version: None,
@@ -588,14 +584,13 @@ impl ConversionContext {
             values,
         }));
 
-        // Create Types relation
-        let rel_entity_id = make_rel_entity_id(PREFIX_COUNTRY, country.id, 0, 0);
+        // Create Types relation (unique mode uses auto-derived entity)
         self.ops.push(Op::CreateRelation(CreateRelation {
             id_mode: RelationIdMode::Unique,
             relation_type: rel_types::TYPES,
             from: entity_id,
             to: types::COUNTRY,
-            entity: rel_entity_id,
+            entity: None,
             position: None,
             from_space: None,
             from_version: None,
@@ -607,15 +602,14 @@ impl ConversionContext {
         if let (Some(region_id), Some(region_name)) = (country.region_id, &country.region) {
             self.ensure_region(region_id, region_name);
 
-            // IN_REGION relation
+            // IN_REGION relation (unique mode uses auto-derived entity)
             let region_entity_id = make_entity_id(PREFIX_REGION, region_id);
-            let rel_entity_id = make_rel_entity_id(PREFIX_COUNTRY, country.id, 1, 0);
             self.ops.push(Op::CreateRelation(CreateRelation {
                 id_mode: RelationIdMode::Unique,
                 relation_type: rel_types::IN_REGION,
                 from: entity_id,
                 to: region_entity_id,
-                entity: rel_entity_id,
+                entity: None,
                 position: None,
                 from_space: None,
                 from_version: None,
@@ -627,15 +621,14 @@ impl ConversionContext {
         if let (Some(subregion_id), Some(subregion_name)) = (country.subregion_id, &country.subregion) {
             self.ensure_subregion(subregion_id, subregion_name, country.region_id);
 
-            // IN_SUBREGION relation
+            // IN_SUBREGION relation (unique mode uses auto-derived entity)
             let subregion_entity_id = make_entity_id(PREFIX_SUBREGION, subregion_id);
-            let rel_entity_id = make_rel_entity_id(PREFIX_COUNTRY, country.id, 2, 0);
             self.ops.push(Op::CreateRelation(CreateRelation {
                 id_mode: RelationIdMode::Unique,
                 relation_type: rel_types::IN_SUBREGION,
                 from: entity_id,
                 to: subregion_entity_id,
-                entity: rel_entity_id,
+                entity: None,
                 position: None,
                 from_space: None,
                 from_version: None,
@@ -644,19 +637,19 @@ impl ConversionContext {
             }));
         }
 
-        // Create timezone relations
+        // Create timezone relations (instance mode with auto-derived entity)
         if let Some(ref timezones) = country.timezones {
             for (i, tz) in timezones.iter().enumerate() {
                 self.ensure_timezone(tz);
 
                 let tz_entity_id = make_timezone_id(&tz.zone_name);
-                let rel_entity_id = make_rel_entity_id(PREFIX_COUNTRY, country.id, 3, i as u32);
+                let rel_id = make_rel_entity_id(PREFIX_COUNTRY, country.id, 3, i as u32);
                 self.ops.push(Op::CreateRelation(CreateRelation {
-                    id_mode: RelationIdMode::Instance(rel_entity_id),
+                    id_mode: RelationIdMode::Instance(rel_id),
                     relation_type: rel_types::HAS_TIMEZONE,
                     from: entity_id,
                     to: tz_entity_id,
-                    entity: rel_entity_id,
+                    entity: None, // Auto-derive entity from relation ID
                     position: None,
                     from_space: None,
                     from_version: None,

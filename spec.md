@@ -1,7 +1,7 @@
 # GRC-20 v2 Specification
 
 **Status:** Draft
-**Version:** 0.17.0
+**Version:** 0.18.0
 
 ## 1. Introduction
 
@@ -249,8 +249,8 @@ The `entity` field links to an entity that represents this relation as a node. T
 
 **ID modes:**
 
-1. **Instance mode** (default): Random ID. Multiple relations can exist between same endpoints.
-2. **Unique mode**: Deterministic ID derived from content.
+1. **Unique mode** (default): Deterministic ID derived from `(from, to, type)`. Only one relation can exist for a given triple.
+2. **Instance mode**: Caller-provided ID. Multiple relations can exist between same endpoints.
 
 **Unique mode ID derivation (NORMATIVE):**
 ```
@@ -259,9 +259,21 @@ id = derived_uuid(from_id || to_id || type_id)
 
 Where each component is the raw 16-byte UUID. Space hints and entity are NOT included in the hash.
 
-**Entity ID in unique mode:** The `entity` field is always caller-provided (not derived). If a unique-mode relation already exists, the entire CreateRelation op is ignored, including the entity field. This means the first creator determines the reified entity ID.
+**Entity ID derivation (NORMATIVE):**
 
-**Unique mode client responsibility (NORMATIVE):** When two clients concurrently create the same unique-mode relation with different entity IDs, only the first-committed op establishes the reified entity. Clients submitting `CreateRelation` in unique mode MUST query the resolved state after submission to determine which entity ID was accepted before attaching values to it. Failure to do so may result in orphaned values on a disconnected entity.
+The `entity` field can be explicit (caller-provided) or auto-derived:
+
+- **Auto-derived (default):** When `entity` is absent in CreateRelation, the entity ID is deterministically computed:
+  ```
+  entity_id = derived_uuid("grc20:relation-entity:" || relation_id)
+  ```
+  Where `relation_id` is the 16-byte UUID (either provided in instance mode or derived in unique mode).
+
+- **Explicit:** When `entity` is provided, that ID is used directly. This enables multiple relations to share a single reified entity (hypergraph/bundle patterns).
+
+**Unique mode constraint (NORMATIVE):** In unique mode, `entity` MUST be absent (auto-derived). This ensures unique-mode relations are fully deterministic and race-free—concurrent creators automatically converge on the same relation ID and entity ID without coordination.
+
+**Instance mode flexibility:** In instance mode, `entity` MAY be provided to enable sharing a reified entity across multiple relations. When multiple relations share an entity, values set on that entity are shared across all those relations.
 
 **Ordering:**
 
@@ -382,12 +394,18 @@ CreateRelation {
   to: ID | index
   to_space: ID?            // Optional space hint for target
   to_version: ID?          // Optional version (edit ID) to pin target
-  entity: ID               // Reified entity for this relation
+  entity: ID?              // Explicit reified entity; absent = auto-derived
   position: string?
 }
 ```
 
 **Semantics (NORMATIVE):** If the relation does not exist, create it along with its reified entity (if that entity does not already exist). If the relation already exists with the same ID, the op is ignored (relations are immutable except for position). To add values to the relation, use UpdateEntity on the reified entity ID.
+
+**Entity ID resolution:**
+- If `entity` is absent: `entity_id = derived_uuid("grc20:relation-entity:" || relation_id)`
+- If `entity` is present: `entity_id = entity` (instance mode only)
+
+**Constraint (NORMATIVE):** If `id` is absent (unique mode), `entity` MUST also be absent. Edits that provide `entity` in unique mode MUST be rejected (E005).
 
 **UpdateRelation:**
 ```
@@ -739,7 +757,6 @@ id: ObjectRef
 ```
 mode: uint8                    // 0 = unique, 1 = instance
 [if mode == 1]: id: ID
-entity: ID                     // Reified entity ID
 type: RelationTypeRef
 from: ObjectRef
 to: ObjectRef
@@ -749,13 +766,17 @@ flags: uint8
   bit 2 = has_from_version
   bit 3 = has_to_space
   bit 4 = has_to_version
-  bits 5-7 = reserved (must be 0)
+  bit 5 = has_entity           // If 0, entity is auto-derived from relation ID
+  bits 6-7 = reserved (must be 0)
 [if has_position]: position: String
 [if has_from_space]: from_space: ID
 [if has_from_version]: from_version: ID
 [if has_to_space]: to_space: ID
 [if has_to_version]: to_version: ID
+[if has_entity]: entity: ID    // Explicit reified entity (instance mode only)
 ```
+
+**Entity derivation:** When `has_entity = 0`, the entity ID is computed as `derived_uuid("grc20:relation-entity:" || relation_id)`. When `mode = 0` (unique), `has_entity` MUST be 0.
 
 **UpdateRelation:**
 ```
@@ -912,6 +933,7 @@ Indexers MUST reject edits that fail structural validation:
 | Zstd decompression | Decompressed size doesn't match declared `uncompressed_size` |
 | DataType consistency | Edit dictionary declares DataType different from established schema |
 | Float values | NaN payload (see float rules in Section 2.5) |
+| Unique mode entity | CreateRelation has mode=0 (unique) and has_entity=1 |
 
 **Implementation-defined limits:** This specification does not mandate limits on ops per edit, values per entity, or TEXT/BYTES payload sizes. Implementations and governance systems MAY impose their own limits to prevent resource exhaustion.
 

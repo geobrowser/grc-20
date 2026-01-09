@@ -182,6 +182,9 @@ pub enum EncodeError {
 
     #[error("batch entity has {actual} values but schema requires {expected}")]
     BatchEntityValueCountMismatch { expected: usize, actual: usize },
+
+    #[error("invalid input: {context}")]
+    InvalidInput { context: &'static str },
 }
 
 /// Error during semantic validation.
