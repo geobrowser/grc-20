@@ -128,22 +128,22 @@ pub struct CreateRelation<'a> {
     pub relation_type: Id,
     /// Source entity ID.
     pub from: Id,
+    /// Optional space pin for source entity.
+    pub from_space: Option<Id>,
+    /// Optional version (edit ID) to pin source entity.
+    pub from_version: Option<Id>,
     /// Target entity ID.
     pub to: Id,
+    /// Optional space pin for target entity.
+    pub to_space: Option<Id>,
+    /// Optional version (edit ID) to pin target entity.
+    pub to_version: Option<Id>,
     /// Explicit reified entity ID (many mode only).
     /// If None, entity ID is auto-derived from the relation ID.
     /// Must be None in unique mode.
     pub entity: Option<Id>,
     /// Optional ordering position (fractional indexing).
     pub position: Option<Cow<'a, str>>,
-    /// Optional space hint for source entity.
-    pub from_space: Option<Id>,
-    /// Optional version (edit ID) to pin source entity.
-    pub from_version: Option<Id>,
-    /// Optional space hint for target entity.
-    pub to_space: Option<Id>,
-    /// Optional version (edit ID) to pin target entity.
-    pub to_version: Option<Id>,
 }
 
 impl CreateRelation<'_> {
@@ -179,7 +179,7 @@ impl CreateRelation<'_> {
 
 /// Updates a relation's position (spec Section 3.3).
 ///
-/// All other fields (entity, type, from, to, space hints, version pins) are immutable.
+/// All other fields (entity, type, from, to, space pins, version pins) are immutable.
 #[derive(Debug, Clone, PartialEq)]
 pub struct UpdateRelation<'a> {
     /// The relation to update.

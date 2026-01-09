@@ -26,16 +26,17 @@ const FLAG_HAS_SET_PROPERTIES: u8 = 0x01;
 const FLAG_HAS_UNSET_PROPERTIES: u8 = 0x02;
 const UPDATE_ENTITY_RESERVED_MASK: u8 = 0xFC;
 
-// CreateRelation flags
-const FLAG_HAS_POSITION: u8 = 0x01;
-const FLAG_HAS_FROM_SPACE: u8 = 0x02;
-const FLAG_HAS_FROM_VERSION: u8 = 0x04;
-const FLAG_HAS_TO_SPACE: u8 = 0x08;
-const FLAG_HAS_TO_VERSION: u8 = 0x10;
-const FLAG_HAS_ENTITY: u8 = 0x20;
+// CreateRelation flags (bit order matches field order in spec Section 6.4)
+const FLAG_HAS_FROM_SPACE: u8 = 0x01;
+const FLAG_HAS_FROM_VERSION: u8 = 0x02;
+const FLAG_HAS_TO_SPACE: u8 = 0x04;
+const FLAG_HAS_TO_VERSION: u8 = 0x08;
+const FLAG_HAS_ENTITY: u8 = 0x10;
+const FLAG_HAS_POSITION: u8 = 0x20;
 const CREATE_RELATION_RESERVED_MASK: u8 = 0xC0;
 
 // UpdateRelation flags (only position is mutable)
+const UPDATE_FLAG_HAS_POSITION: u8 = 0x01;
 const UPDATE_RELATION_RESERVED_MASK: u8 = 0xFE;
 
 // Relation ID modes
@@ -239,12 +240,7 @@ fn decode_create_relation<'a>(
         });
     }
 
-    let position = if flags & FLAG_HAS_POSITION != 0 {
-        Some(decode_position(reader)?)
-    } else {
-        None
-    };
-
+    // Read optional fields in spec order: from_space, from_version, to_space, to_version, entity, position
     let from_space = if flags & FLAG_HAS_FROM_SPACE != 0 {
         Some(reader.read_id("from_space")?)
     } else {
@@ -269,9 +265,14 @@ fn decode_create_relation<'a>(
         None
     };
 
-    // Entity is read after other optional fields if has_entity flag is set
     let entity = if has_entity {
         Some(reader.read_id("entity_id")?)
+    } else {
+        None
+    };
+
+    let position = if flags & FLAG_HAS_POSITION != 0 {
+        Some(decode_position(reader)?)
     } else {
         None
     };
@@ -313,7 +314,7 @@ fn decode_update_relation<'a>(
         });
     }
 
-    let position = if flags & FLAG_HAS_POSITION != 0 {
+    let position = if flags & UPDATE_FLAG_HAS_POSITION != 0 {
         Some(decode_position(reader)?)
     } else {
         None
@@ -471,10 +472,8 @@ fn encode_create_relation(
     let to_index = dict_builder.add_object(cr.to);
     writer.write_varint(to_index as u64);
 
+    // Build flags (bit order matches field order in spec Section 6.4)
     let mut flags = 0u8;
-    if cr.position.is_some() {
-        flags |= FLAG_HAS_POSITION;
-    }
     if cr.from_space.is_some() {
         flags |= FLAG_HAS_FROM_SPACE;
     }
@@ -490,13 +489,12 @@ fn encode_create_relation(
     if cr.entity.is_some() {
         flags |= FLAG_HAS_ENTITY;
     }
+    if cr.position.is_some() {
+        flags |= FLAG_HAS_POSITION;
+    }
     writer.write_byte(flags);
 
-    if let Some(pos) = &cr.position {
-        validate_position(pos)?;
-        writer.write_string(pos);
-    }
-
+    // Write optional fields in spec order: from_space, from_version, to_space, to_version, entity, position
     if let Some(space) = &cr.from_space {
         writer.write_id(space);
     }
@@ -513,9 +511,13 @@ fn encode_create_relation(
         writer.write_id(version);
     }
 
-    // Entity is written after other optional fields if present
     if let Some(entity) = &cr.entity {
         writer.write_id(entity);
+    }
+
+    if let Some(pos) = &cr.position {
+        validate_position(pos)?;
+        writer.write_string(pos);
     }
 
     Ok(())
@@ -531,7 +533,7 @@ fn encode_update_relation(
     let id_index = dict_builder.add_object(ur.id);
     writer.write_varint(id_index as u64);
 
-    let flags = if ur.position.is_some() { FLAG_HAS_POSITION } else { 0 };
+    let flags = if ur.position.is_some() { UPDATE_FLAG_HAS_POSITION } else { 0 };
     writer.write_byte(flags);
 
     if let Some(pos) = &ur.position {

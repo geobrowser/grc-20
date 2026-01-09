@@ -235,10 +235,10 @@ Relation {
   type: ID | index
   from: ID             // Source entity
   to: ID               // Target entity
-  from_space: ID?      // Optional space hint for source
-  from_version: ID?    // Optional version (edit ID) to pin source
-  to_space: ID?        // Optional space hint for target
-  to_version: ID?      // Optional version (edit ID) to pin target
+  from_space: ID?      // Optional space pin for source
+  from_version: ID?    // Optional version pin for source
+  to_space: ID?        // Optional space pin for target
+  to_version: ID?      // Optional version pin for target
   position: string?
 }
 ```
@@ -257,7 +257,7 @@ The `entity` field links to an entity that represents this relation as a node. T
 id = derived_uuid(from_id || to_id || type_id)
 ```
 
-Where each component is the raw 16-byte UUID. Space hints and entity are NOT included in the hash.
+Where each component is the raw 16-byte UUID. Space pins and entity are NOT included in the hash.
 
 **Entity ID derivation (NORMATIVE):**
 
@@ -389,11 +389,11 @@ CreateRelation {
   id: ID?                  // Present = many mode; absent = unique mode
   type: ID | index
   from: ID | index
-  from_space: ID?          // Optional space hint for source
-  from_version: ID?        // Optional version (edit ID) to pin source
+  from_space: ID?          // Optional space pin for source
+  from_version: ID?        // Optional version pin for source
   to: ID | index
-  to_space: ID?            // Optional space hint for target
-  to_version: ID?          // Optional version (edit ID) to pin target
+  to_space: ID?            // Optional space pin for target
+  to_version: ID?          // Optional version pin for target
   entity: ID?              // Explicit reified entity; absent = auto-derived
   position: string?
 }
@@ -415,7 +415,7 @@ UpdateRelation {
 }
 ```
 
-Updates the relation's position. All other fields (`entity`, `type`, `from`, `to`, space hints, version pins) are immutable after creation.
+Updates the relation's position. All other fields (`entity`, `type`, `from`, `to`, space pins, version pins) are immutable after creation.
 
 **DeleteRelation:**
 ```
@@ -583,7 +583,7 @@ Canonical encoding produces deterministic bytes for the same logical edit. Use c
 
 3. **Consistent field encoding:** Optional fields use presence flags as specified in Section 6. No additional padding or alignment bytes.
 
-**Performance note:** Canonical encoding requires sorting dictionaries after collection, which may be slower than fast mode. Implementations SHOULD offer both modes.
+**Performance note:** Canonical encoding requires sorting dictionaries after collection, which is substantially slower than fast mode. Implementations SHOULD offer both modes.
 
 ### 4.5 Edit Publishing
 
@@ -603,21 +603,21 @@ The same object ID can exist in multiple spaces with different data. Consumers c
 
 ### 5.2 Cross-Space References
 
-Object IDs are globally unique. Relations can optionally include space and version hints for their endpoints:
+Object IDs are globally unique. Relations can optionally include space and version pins for their endpoints:
 
 ```
 Relation {
   ...
-  from_space: ID?      // Optional provenance hint for source
-  from_version: ID?    // Optional version (edit ID) to pin source
-  to_space: ID?        // Optional provenance hint for target
-  to_version: ID?      // Optional version (edit ID) to pin target
+  from_space: ID?      // Optional space pin for source
+  from_version: ID?    // Optional version pin for source
+  to_space: ID?        // Optional space pin for target
+  to_version: ID?      // Optional version pin for target
 }
 ```
 
-Space hints are provenance metadata for performance, not hard requirements. Resolvers MAY use hints to prefer a specific space when resolving the target.
+**Space pins:** The `from_space` and `to_space` fields pin relation endpoints to a specific space. This enables precise cross-space references where the relation refers to the entity as it exists in that specific space, rather than relying on resolution heuristics. Space pins are immutable after creation.
 
-**Version pinning:** The `from_version` and `to_version` fields allow pinning relation endpoints to a specific version (edit ID). This enables immutable citations where the relation always refers to the entity as it existed at that specific edit, rather than the current resolved state. Version pins are immutable after creation.
+**Version pins:** The `from_version` and `to_version` fields pin relation endpoints to a specific version (edit ID). This enables immutable citations where the relation always refers to the entity as it existed at that specific edit, rather than the current resolved state. Version pins are immutable after creation.
 
 ---
 
@@ -761,19 +761,19 @@ type: RelationTypeRef
 from: ObjectRef
 to: ObjectRef
 flags: uint8
-  bit 0 = has_position
-  bit 1 = has_from_space
-  bit 2 = has_from_version
-  bit 3 = has_to_space
-  bit 4 = has_to_version
-  bit 5 = has_entity           // If 0, entity is auto-derived from relation ID
+  bit 0 = has_from_space
+  bit 1 = has_from_version
+  bit 2 = has_to_space
+  bit 3 = has_to_version
+  bit 4 = has_entity           // If 0, entity is auto-derived from relation ID
+  bit 5 = has_position
   bits 6-7 = reserved (must be 0)
-[if has_position]: position: String
 [if has_from_space]: from_space: ID
 [if has_from_version]: from_version: ID
 [if has_to_space]: to_space: ID
 [if has_to_version]: to_version: ID
 [if has_entity]: entity: ID    // Explicit reified entity (many mode only)
+[if has_position]: position: String
 ```
 
 **Entity derivation:** When `has_entity = 0`, the entity ID is computed as `derived_uuid("grc20:relation-entity:" || relation_id)`. When `mode = 0` (unique), `has_entity` MUST be 0.
