@@ -78,7 +78,11 @@ pub mod model;
 pub mod validate;
 
 // Re-export commonly used types at crate root
-pub use codec::{decode_edit, decompress, encode_edit, encode_edit_compressed, encode_edit_profiled};
+pub use codec::{
+    decode_edit, decompress, encode_edit, encode_edit_compressed,
+    encode_edit_compressed_with_options, encode_edit_profiled, encode_edit_with_options,
+    EncodeOptions,
+};
 pub use error::{DecodeError, EncodeError, ValidationError};
 pub use model::{
     CreateEntity, CreateProperty, CreateRelation, DataType, DecimalMantissa, DeleteEntity,
@@ -92,4 +96,4 @@ pub use validate::{validate_edit, validate_position, validate_value, SchemaConte
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// GRC-20 spec version this crate implements.
-pub const SPEC_VERSION: &str = "0.16.0";
+pub const SPEC_VERSION: &str = "0.17.0";

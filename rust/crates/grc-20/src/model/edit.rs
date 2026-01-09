@@ -309,6 +309,72 @@ impl DictionaryBuilder {
         // Objects
         writer.write_id_vec(&self.objects);
     }
+
+    /// Converts this builder into a sorted canonical form.
+    ///
+    /// All dictionaries are sorted by ID bytes (lexicographic order),
+    /// and the index maps are rebuilt to reflect the new ordering.
+    ///
+    /// This is used for canonical encoding to ensure deterministic output.
+    pub fn into_sorted(self) -> Self {
+        // Sort properties by ID
+        let mut properties = self.properties;
+        properties.sort_by(|a, b| a.0.cmp(&b.0));
+        let property_indices: FxHashMap<Id, usize> = properties
+            .iter()
+            .enumerate()
+            .map(|(i, (id, _))| (*id, i))
+            .collect();
+
+        // Sort relation types by ID
+        let mut relation_types = self.relation_types;
+        relation_types.sort();
+        let relation_type_indices: FxHashMap<Id, usize> = relation_types
+            .iter()
+            .enumerate()
+            .map(|(i, id)| (*id, i))
+            .collect();
+
+        // Sort languages by ID
+        let mut languages = self.languages;
+        languages.sort();
+        let language_indices: FxHashMap<Id, usize> = languages
+            .iter()
+            .enumerate()
+            .map(|(i, id)| (*id, i))
+            .collect();
+
+        // Sort units by ID
+        let mut units = self.units;
+        units.sort();
+        let unit_indices: FxHashMap<Id, usize> = units
+            .iter()
+            .enumerate()
+            .map(|(i, id)| (*id, i))
+            .collect();
+
+        // Sort objects by ID
+        let mut objects = self.objects;
+        objects.sort();
+        let object_indices: FxHashMap<Id, usize> = objects
+            .iter()
+            .enumerate()
+            .map(|(i, id)| (*id, i))
+            .collect();
+
+        Self {
+            properties,
+            property_indices,
+            relation_types,
+            relation_type_indices,
+            languages,
+            language_indices,
+            units,
+            unit_indices,
+            objects,
+            object_indices,
+        }
+    }
 }
 
 #[cfg(test)]

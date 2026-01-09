@@ -1,7 +1,7 @@
 # GRC-20 v2 Specification
 
 **Status:** Draft
-**Version:** 0.16.0
+**Version:** 0.17.0
 
 ## 1. Introduction
 
@@ -468,7 +468,12 @@ Edits are standalone patches. They contain no parent references—ordering is pr
 
 **`created_at`** is metadata for audit/display only. It is NOT used for conflict resolution.
 
-**Byte-level determinism:** This specification does not require byte-level deterministic encoding. The same logical edit MAY produce different byte sequences across implementations. Content-addressing (CID) is based on the bytes actually produced by the encoder.
+**Encoding modes:** This specification defines two encoding modes:
+
+- **Fast mode (default):** Dictionary order is implementation-defined. Optimized for encode speed.
+- **Canonical mode:** Deterministic encoding for reproducible bytes. Required for signing and content deduplication.
+
+Content-addressing (CID) is based on the bytes actually produced by the encoder. For reproducible CIDs across implementations, use canonical mode.
 
 ### 4.2 Sequential Ordering
 
@@ -539,9 +544,30 @@ The property dictionary includes both ID and DataType. This allows values to omi
 
 **Size limits (NORMATIVE):** All dictionary counts MUST be ≤ 4,294,967,294 (0xFFFFFFFE). All reference indices MUST be < their respective dictionary count. Out-of-bounds indices MUST be rejected (E002).
 
-Dictionary entries SHOULD be sorted by ID bytes (lexicographic).
+**Dictionary ordering:**
+- **Fast mode:** Dictionary order is implementation-defined (typically insertion order).
+- **Canonical mode (NORMATIVE):** Dictionary entries MUST be sorted by ID bytes (lexicographic, unsigned byte comparison). This ensures identical logical edits produce identical bytes.
 
-### 4.4 Edit Publishing
+### 4.4 Canonical Encoding
+
+Canonical encoding produces deterministic bytes for the same logical edit. Use canonical mode when:
+
+- Computing content hashes for deduplication
+- Creating signatures over edit content
+- Ensuring cross-implementation reproducibility
+- Blockchain anchoring where byte-level determinism matters
+
+**Canonical encoding rules (NORMATIVE):**
+
+1. **Sorted dictionaries:** All dictionaries (`properties`, `relation_type_ids`, `language_ids`, `unit_ids`, `object_ids`) MUST be sorted by ID bytes in ascending lexicographic order (unsigned byte comparison).
+
+2. **Minimal varints:** Varints MUST use the minimum number of bytes required. Overlong encodings (e.g., encoding 1 as `81 00` instead of `01`) are invalid.
+
+3. **Consistent field encoding:** Optional fields use presence flags as specified in Section 6. No additional padding or alignment bytes.
+
+**Performance note:** Canonical encoding requires sorting dictionaries after collection, which may be slower than fast mode. Implementations SHOULD offer both modes.
+
+### 4.5 Edit Publishing
 
 1. Serialize edit to binary format (Section 6)
 2. Publish to content-addressed storage (IPFS)

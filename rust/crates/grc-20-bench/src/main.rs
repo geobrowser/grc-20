@@ -7,7 +7,7 @@ use std::path::Path;
 use std::time::Instant;
 
 use grc_20::{
-    CreateEntity, CreateProperty, CreateRelation, DataType, Edit, Op, PropertyValue,
+    CreateEntity, CreateProperty, CreateRelation, DataType, Edit, EncodeOptions, Op, PropertyValue,
     RelationIdMode, Value,
 };
 use serde::Deserialize;
@@ -734,7 +734,7 @@ fn main() {
     // Find the data file
     let data_path = std::env::args()
         .nth(1)
-        .unwrap_or_else(|| "../../data/countries.json".to_string());
+        .unwrap_or_else(|| "../data/countries.json".to_string());
 
     println!("Loading countries from: {}", data_path);
 
@@ -794,13 +794,13 @@ fn main() {
         ops: ctx.ops,
     };
 
-    // Benchmark encoding (uncompressed)
+    // Benchmark encoding (uncompressed, fast mode)
     let encode_start = Instant::now();
     let encoded = grc_20::encode_edit(&edit).expect("Failed to encode");
     let encode_time = encode_start.elapsed();
 
     println!(
-        "\nUncompressed: {} bytes in {:?}",
+        "\nUncompressed (fast): {} bytes in {:?}",
         encoded.len(),
         encode_time
     );
@@ -808,6 +808,31 @@ fn main() {
         "  Throughput: {:.2} MB/s",
         (encoded.len() as f64 / 1_000_000.0) / encode_time.as_secs_f64()
     );
+
+    // Benchmark encoding (uncompressed, canonical mode)
+    let canonical_start = Instant::now();
+    let canonical_encoded = grc_20::encode_edit_with_options(&edit, EncodeOptions::canonical())
+        .expect("Failed to encode canonical");
+    let canonical_time = canonical_start.elapsed();
+
+    println!(
+        "\nUncompressed (canonical): {} bytes in {:?}",
+        canonical_encoded.len(),
+        canonical_time
+    );
+    println!(
+        "  Throughput: {:.2} MB/s",
+        (canonical_encoded.len() as f64 / 1_000_000.0) / canonical_time.as_secs_f64()
+    );
+    println!(
+        "  Overhead vs fast: {:.1}x slower",
+        canonical_time.as_secs_f64() / encode_time.as_secs_f64()
+    );
+
+    // Verify canonical encoding is deterministic (encode twice)
+    let canonical_encoded2 = grc_20::encode_edit_with_options(&edit, EncodeOptions::canonical())
+        .expect("Failed to encode canonical");
+    assert_eq!(canonical_encoded, canonical_encoded2, "Canonical encoding should be deterministic");
 
     // Benchmark encoding (compressed)
     let compress_start = Instant::now();
