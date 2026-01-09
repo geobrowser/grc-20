@@ -40,7 +40,7 @@ const UPDATE_RELATION_RESERVED_MASK: u8 = 0xFE;
 
 // Relation ID modes
 const MODE_UNIQUE: u8 = 0;
-const MODE_INSTANCE: u8 = 1;
+const MODE_MANY: u8 = 1;
 
 // =============================================================================
 // DECODING
@@ -181,9 +181,9 @@ fn decode_create_relation<'a>(
 
     let id_mode = match mode {
         MODE_UNIQUE => RelationIdMode::Unique,
-        MODE_INSTANCE => {
+        MODE_MANY => {
             let id = reader.read_id("relation_id")?;
-            RelationIdMode::Instance(id)
+            RelationIdMode::Many(id)
         }
         _ => {
             return Err(DecodeError::MalformedEncoding {
@@ -456,8 +456,8 @@ fn encode_create_relation(
         RelationIdMode::Unique => {
             writer.write_byte(MODE_UNIQUE);
         }
-        RelationIdMode::Instance(id) => {
-            writer.write_byte(MODE_INSTANCE);
+        RelationIdMode::Many(id) => {
+            writer.write_byte(MODE_MANY);
             writer.write_id(id);
         }
     }
@@ -627,7 +627,7 @@ mod tests {
     fn test_create_relation_roundtrip() {
         // Test with explicit entity (instance mode)
         let op = Op::CreateRelation(CreateRelation {
-            id_mode: RelationIdMode::Instance([10u8; 16]),
+            id_mode: RelationIdMode::Many([10u8; 16]),
             relation_type: [1u8; 16],
             from: [2u8; 16],
             to: [3u8; 16],
@@ -671,7 +671,7 @@ mod tests {
     fn test_create_relation_auto_entity_roundtrip() {
         // Test with auto-derived entity (entity = None)
         let op = Op::CreateRelation(CreateRelation {
-            id_mode: RelationIdMode::Instance([10u8; 16]),
+            id_mode: RelationIdMode::Many([10u8; 16]),
             relation_type: [1u8; 16],
             from: [2u8; 16],
             to: [3u8; 16],
@@ -782,7 +782,7 @@ mod tests {
     #[test]
     fn test_create_relation_with_versions() {
         let op = Op::CreateRelation(CreateRelation {
-            id_mode: RelationIdMode::Instance([10u8; 16]),
+            id_mode: RelationIdMode::Many([10u8; 16]),
             relation_type: [1u8; 16],
             from: [2u8; 16],
             to: [3u8; 16],

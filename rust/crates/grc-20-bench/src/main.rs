@@ -645,7 +645,7 @@ impl ConversionContext {
                 let tz_entity_id = make_timezone_id(&tz.zone_name);
                 let rel_id = make_rel_entity_id(PREFIX_COUNTRY, country.id, 3, i as u32);
                 self.ops.push(Op::CreateRelation(CreateRelation {
-                    id_mode: RelationIdMode::Instance(rel_id),
+                    id_mode: RelationIdMode::Many(rel_id),
                     relation_type: rel_types::HAS_TIMEZONE,
                     from: entity_id,
                     to: tz_entity_id,

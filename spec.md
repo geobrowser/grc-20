@@ -250,7 +250,7 @@ The `entity` field links to an entity that represents this relation as a node. T
 **ID modes:**
 
 1. **Unique mode** (default): Deterministic ID derived from `(from, to, type)`. Only one relation can exist for a given triple.
-2. **Instance mode**: Caller-provided ID. Multiple relations can exist between same endpoints.
+2. **Many mode**: Caller-provided ID. Multiple relations can exist between same endpoints.
 
 **Unique mode ID derivation (NORMATIVE):**
 ```
@@ -267,13 +267,13 @@ The `entity` field can be explicit (caller-provided) or auto-derived:
   ```
   entity_id = derived_uuid("grc20:relation-entity:" || relation_id)
   ```
-  Where `relation_id` is the 16-byte UUID (either provided in instance mode or derived in unique mode).
+  Where `relation_id` is the 16-byte UUID (either provided in many mode or derived in unique mode).
 
 - **Explicit:** When `entity` is provided, that ID is used directly. This enables multiple relations to share a single reified entity (hypergraph/bundle patterns).
 
 **Unique mode constraint (NORMATIVE):** In unique mode, `entity` MUST be absent (auto-derived). This ensures unique-mode relations are fully deterministic and race-free—concurrent creators automatically converge on the same relation ID and entity ID without coordination.
 
-**Instance mode flexibility:** In instance mode, `entity` MAY be provided to enable sharing a reified entity across multiple relations. When multiple relations share an entity, values set on that entity are shared across all those relations.
+**Many mode flexibility:** In many mode, `entity` MAY be provided to enable sharing a reified entity across multiple relations. When multiple relations share an entity, values set on that entity are shared across all those relations.
 
 **Ordering:**
 
@@ -386,7 +386,7 @@ Appends tombstone to history. Subsequent updates to this entity are ignored.
 **CreateRelation:**
 ```
 CreateRelation {
-  id: ID?                  // Present = instance mode; absent = unique mode
+  id: ID?                  // Present = many mode; absent = unique mode
   type: ID | index
   from: ID | index
   from_space: ID?          // Optional space hint for source
@@ -403,7 +403,7 @@ CreateRelation {
 
 **Entity ID resolution:**
 - If `entity` is absent: `entity_id = derived_uuid("grc20:relation-entity:" || relation_id)`
-- If `entity` is present: `entity_id = entity` (instance mode only)
+- If `entity` is present: `entity_id = entity` (many mode only)
 
 **Constraint (NORMATIVE):** If `id` is absent (unique mode), `entity` MUST also be absent. Edits that provide `entity` in unique mode MUST be rejected (E005).
 
@@ -558,7 +558,7 @@ The property dictionary includes both ID and DataType. This allows values to omi
 
 **Object dictionary requirement (NORMATIVE):** All objects (entities and relations) referenced in an edit MUST be declared in the `object_ids` dictionary. This includes: operation targets (UpdateEntity, DeleteEntity, etc.) and relation endpoints (`from`, `to`).
 
-**Unique-mode relations:** In unique mode, the relation ID is derived (Section 2.6). To reference a unique-mode relation in the same edit (e.g., UpdateRelation to set position), the encoder MUST compute the derived ID and include it in `object_ids`. CreateRelation itself does not require the relation ID in the dictionary since it encodes the ID inline (instance mode) or derives it (unique mode).
+**Unique-mode relations:** In unique mode, the relation ID is derived (Section 2.6). To reference a unique-mode relation in the same edit (e.g., UpdateRelation to set position), the encoder MUST compute the derived ID and include it in `object_ids`. CreateRelation itself does not require the relation ID in the dictionary since it encodes the ID inline (many mode) or derives it (unique mode).
 
 **Size limits (NORMATIVE):** All dictionary counts MUST be ≤ 4,294,967,294 (0xFFFFFFFE). All reference indices MUST be < their respective dictionary count. Out-of-bounds indices MUST be rejected (E002).
 
@@ -755,7 +755,7 @@ id: ObjectRef
 
 **CreateRelation:**
 ```
-mode: uint8                    // 0 = unique, 1 = instance
+mode: uint8                    // 0 = unique, 1 = many
 [if mode == 1]: id: ID
 type: RelationTypeRef
 from: ObjectRef
@@ -773,7 +773,7 @@ flags: uint8
 [if has_from_version]: from_version: ID
 [if has_to_space]: to_space: ID
 [if has_to_version]: to_version: ID
-[if has_entity]: entity: ID    // Explicit reified entity (instance mode only)
+[if has_entity]: entity: ID    // Explicit reified entity (many mode only)
 ```
 
 **Entity derivation:** When `has_entity = 0`, the entity ID is computed as `derived_uuid("grc20:relation-entity:" || relation_id)`. When `mode = 0` (unique), `has_entity` MUST be 0.

@@ -111,8 +111,8 @@ pub struct DeleteEntity {
 /// Relation ID mode for CreateRelation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RelationIdMode {
-    /// Random ID provided by caller. Multiple relations can exist between same endpoints.
-    Instance(Id),
+    /// Caller-provided ID. Multiple relations can exist between same endpoints.
+    Many(Id),
     /// Deterministic ID derived from from_id || to_id || type_id.
     Unique,
 }
@@ -130,7 +130,7 @@ pub struct CreateRelation<'a> {
     pub from: Id,
     /// Target entity ID.
     pub to: Id,
-    /// Explicit reified entity ID (instance mode only).
+    /// Explicit reified entity ID (many mode only).
     /// If None, entity ID is auto-derived from the relation ID.
     /// Must be None in unique mode.
     pub entity: Option<Id>,
@@ -149,12 +149,12 @@ pub struct CreateRelation<'a> {
 impl CreateRelation<'_> {
     /// Computes the actual relation ID.
     ///
-    /// For instance mode, returns the provided ID.
+    /// For many mode, returns the provided ID.
     /// For unique mode, derives the ID from from || to || type.
     pub fn relation_id(&self) -> Id {
         use crate::model::id::unique_relation_id;
         match &self.id_mode {
-            RelationIdMode::Instance(id) => *id,
+            RelationIdMode::Many(id) => *id,
             RelationIdMode::Unique => unique_relation_id(&self.from, &self.to, &self.relation_type),
         }
     }
@@ -285,10 +285,10 @@ mod tests {
         let to = [2u8; 16];
         let rel_type = [3u8; 16];
 
-        // Instance mode returns the provided ID
-        let instance_id = [5u8; 16];
-        let rel_instance = CreateRelation {
-            id_mode: RelationIdMode::Instance(instance_id),
+        // Many mode returns the provided ID
+        let many_id = [5u8; 16];
+        let rel_many = CreateRelation {
+            id_mode: RelationIdMode::Many(many_id),
             relation_type: rel_type,
             from,
             to,
@@ -299,7 +299,7 @@ mod tests {
             to_space: None,
             to_version: None,
         };
-        assert_eq!(rel_instance.relation_id(), instance_id);
+        assert_eq!(rel_many.relation_id(), many_id);
 
         // Unique mode derives the ID
         let rel_unique = CreateRelation {
@@ -324,11 +324,11 @@ mod tests {
         let from = [1u8; 16];
         let to = [2u8; 16];
         let rel_type = [3u8; 16];
-        let instance_id = [5u8; 16];
+        let many_id = [5u8; 16];
 
         // Auto-derived entity (entity = None)
         let rel_auto = CreateRelation {
-            id_mode: RelationIdMode::Instance(instance_id),
+            id_mode: RelationIdMode::Many(many_id),
             relation_type: rel_type,
             from,
             to,
@@ -339,13 +339,13 @@ mod tests {
             to_space: None,
             to_version: None,
         };
-        assert_eq!(rel_auto.entity_id(), relation_entity_id(&instance_id));
+        assert_eq!(rel_auto.entity_id(), relation_entity_id(&many_id));
         assert!(!rel_auto.has_explicit_entity());
 
         // Explicit entity
         let explicit_entity = [6u8; 16];
         let rel_explicit = CreateRelation {
-            id_mode: RelationIdMode::Instance(instance_id),
+            id_mode: RelationIdMode::Many(many_id),
             relation_type: rel_type,
             from,
             to,
