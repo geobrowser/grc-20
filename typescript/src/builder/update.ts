@@ -8,8 +8,8 @@ import { EmbeddingSubType } from "../types/value.js";
  */
 export class UpdateEntityBuilder {
   private readonly _id: Id;
-  private setProperties: PropertyValue[] = [];
-  private unsetProperties: UnsetProperty[] = [];
+  private _set: PropertyValue[] = [];
+  private _unset: UnsetProperty[] = [];
 
   constructor(id: Id) {
     this._id = id;
@@ -26,7 +26,7 @@ export class UpdateEntityBuilder {
    * Sets a property value.
    */
   set(property: Id, value: Value): this {
-    this.setProperties.push({ property, value });
+    this._set.push({ property, value });
     return this;
   }
 
@@ -34,7 +34,7 @@ export class UpdateEntityBuilder {
    * Sets a TEXT value.
    */
   setText(property: Id, value: string, language?: Id): this {
-    this.setProperties.push({
+    this._set.push({
       property,
       value: { type: "text", value, language },
     });
@@ -45,7 +45,7 @@ export class UpdateEntityBuilder {
    * Sets an INT64 value.
    */
   setInt64(property: Id, value: bigint, unit?: Id): this {
-    this.setProperties.push({
+    this._set.push({
       property,
       value: { type: "int64", value, unit },
     });
@@ -56,7 +56,7 @@ export class UpdateEntityBuilder {
    * Sets a FLOAT64 value.
    */
   setFloat64(property: Id, value: number, unit?: Id): this {
-    this.setProperties.push({
+    this._set.push({
       property,
       value: { type: "float64", value, unit },
     });
@@ -67,7 +67,7 @@ export class UpdateEntityBuilder {
    * Sets a BOOL value.
    */
   setBool(property: Id, value: boolean): this {
-    this.setProperties.push({
+    this._set.push({
       property,
       value: { type: "bool", value },
     });
@@ -78,7 +78,7 @@ export class UpdateEntityBuilder {
    * Sets a BYTES value.
    */
   setBytes(property: Id, value: Uint8Array): this {
-    this.setProperties.push({
+    this._set.push({
       property,
       value: { type: "bytes", value },
     });
@@ -89,7 +89,7 @@ export class UpdateEntityBuilder {
    * Sets a POINT value (longitude, latitude, optional altitude).
    */
   setPoint(property: Id, lon: number, lat: number, alt?: number): this {
-    this.setProperties.push({
+    this._set.push({
       property,
       value: { type: "point", lon, lat, alt },
     });
@@ -100,7 +100,7 @@ export class UpdateEntityBuilder {
    * Sets a DATE value.
    */
   setDate(property: Id, value: string): this {
-    this.setProperties.push({
+    this._set.push({
       property,
       value: { type: "date", value },
     });
@@ -111,7 +111,7 @@ export class UpdateEntityBuilder {
    * Sets a SCHEDULE value (RFC 5545 iCalendar format).
    */
   setSchedule(property: Id, value: string): this {
-    this.setProperties.push({
+    this._set.push({
       property,
       value: { type: "schedule", value },
     });
@@ -122,7 +122,7 @@ export class UpdateEntityBuilder {
    * Sets a DECIMAL value.
    */
   setDecimal(property: Id, exponent: number, mantissa: DecimalMantissa, unit?: Id): this {
-    this.setProperties.push({
+    this._set.push({
       property,
       value: { type: "decimal", exponent, mantissa, unit },
     });
@@ -145,7 +145,7 @@ export class UpdateEntityBuilder {
     dims: number,
     data: Uint8Array
   ): this {
-    this.setProperties.push({
+    this._set.push({
       property,
       value: { type: "embedding", subType, dims, data },
     });
@@ -156,7 +156,7 @@ export class UpdateEntityBuilder {
    * Unsets a specific property+language combination.
    */
   unset(property: Id, language: UnsetLanguage): this {
-    this.unsetProperties.push({ property, language });
+    this._unset.push({ property, language });
     return this;
   }
 
@@ -164,7 +164,7 @@ export class UpdateEntityBuilder {
    * Unsets all values for a property (all languages).
    */
   unsetAll(property: Id): this {
-    this.unsetProperties.push({ property, language: { type: "all" } });
+    this._unset.push({ property, language: { type: "all" } });
     return this;
   }
 
@@ -172,7 +172,7 @@ export class UpdateEntityBuilder {
    * Unsets the non-linguistic value for a property.
    */
   unsetNonLinguistic(property: Id): this {
-    this.unsetProperties.push({ property, language: { type: "nonLinguistic" } });
+    this._unset.push({ property, language: { type: "nonLinguistic" } });
     return this;
   }
 
@@ -180,7 +180,7 @@ export class UpdateEntityBuilder {
    * Unsets a specific language for a property.
    */
   unsetLanguage(property: Id, language: Id): this {
-    this.unsetProperties.push({
+    this._unset.push({
       property,
       language: { type: "specific", language },
     });
@@ -188,16 +188,16 @@ export class UpdateEntityBuilder {
   }
 
   /**
-   * Returns the built set properties array.
+   * Returns the built set values array.
    */
-  getSetProperties(): PropertyValue[] {
-    return this.setProperties;
+  getSet(): PropertyValue[] {
+    return this._set;
   }
 
   /**
-   * Returns the built unset properties array.
+   * Returns the built unset array.
    */
-  getUnsetProperties(): UnsetProperty[] {
-    return this.unsetProperties;
+  getUnset(): UnsetProperty[] {
+    return this._unset;
   }
 }

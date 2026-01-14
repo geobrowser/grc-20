@@ -25,6 +25,7 @@ import {
   OP_TYPE_UPDATE_ENTITY,
   OP_TYPE_UPDATE_RELATION,
 } from "../types/op.js";
+import type { PropertyValue } from "../types/value.js";
 import { DataType } from "../types/value.js";
 import { DecodeError, Reader, Writer } from "./primitives.js";
 import {
@@ -125,21 +126,21 @@ function encodeUpdateEntity(writer: Writer, op: UpdateEntity, dicts: OpDictionar
   writer.writeVarintNumber(dicts.getObjectIndex(op.id));
 
   let flags = 0;
-  if (op.setProperties.length > 0) flags |= UPDATE_HAS_SET_PROPERTIES;
-  if (op.unsetProperties.length > 0) flags |= UPDATE_HAS_UNSET_PROPERTIES;
+  if (op.set.length > 0) flags |= UPDATE_HAS_SET_PROPERTIES;
+  if (op.unset.length > 0) flags |= UPDATE_HAS_UNSET_PROPERTIES;
   writer.writeByte(flags);
 
-  if (op.setProperties.length > 0) {
-    writer.writeVarintNumber(op.setProperties.length);
-    for (const value of op.setProperties) {
+  if (op.set.length > 0) {
+    writer.writeVarintNumber(op.set.length);
+    for (const value of op.set) {
       encodePropertyValue(writer, value, dicts);
     }
   }
 
-  if (op.unsetProperties.length > 0) {
-    writer.writeVarintNumber(op.unsetProperties.length);
-    for (const unset of op.unsetProperties) {
-      encodeUnsetProperty(writer, unset, dicts);
+  if (op.unset.length > 0) {
+    writer.writeVarintNumber(op.unset.length);
+    for (const u of op.unset) {
+      encodeUnsetProperty(writer, u, dicts);
     }
   }
 }
@@ -312,23 +313,23 @@ function decodeUpdateEntity(reader: Reader, dicts: OpDictionaryLookups): UpdateE
     throw new DecodeError("E005", "reserved bits are non-zero in UpdateEntity flags");
   }
 
-  const setProperties = [];
+  const set: PropertyValue[] = [];
   if (flags & UPDATE_HAS_SET_PROPERTIES) {
     const count = reader.readVarintNumber();
     for (let i = 0; i < count; i++) {
-      setProperties.push(decodePropertyValue(reader, dicts));
+      set.push(decodePropertyValue(reader, dicts));
     }
   }
 
-  const unsetProperties: UnsetProperty[] = [];
+  const unset: UnsetProperty[] = [];
   if (flags & UPDATE_HAS_UNSET_PROPERTIES) {
     const count = reader.readVarintNumber();
     for (let i = 0; i < count; i++) {
-      unsetProperties.push(decodeUnsetProperty(reader, dicts));
+      unset.push(decodeUnsetProperty(reader, dicts));
     }
   }
 
-  return { type: "updateEntity", id, setProperties, unsetProperties };
+  return { type: "updateEntity", id, set, unset };
 }
 
 function decodeUnsetProperty(reader: Reader, dicts: DictionaryLookups): UnsetProperty {

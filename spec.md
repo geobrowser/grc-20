@@ -41,11 +41,9 @@ All identifiers are RFC 4122 UUIDs.
 ID := UUID (16 bytes)
 ```
 
-**Byte order (NORMATIVE):** UUID bytes are encoded in network byte order (big-endian), matching the canonical hex representation. Byte `i` corresponds to hex digits `2i` and `2i+1` of the standard 32-character hex string. For example, UUID `550e8400-e29b-41d4-a716-446655440000` is encoded as bytes `[0x55, 0x0e, 0x84, 0x00, 0xe2, 0x9b, ...]`. This applies everywhere UUIDs appear: dictionary entries, inline IDs, derived ID inputs, and sorting comparisons.
-
 **Random IDs:** Use UUIDv4 (random) or UUIDv7 (time-ordered). UUIDv7 is RECOMMENDED for entities and relations as it enables time-based sorting.
 
-**Derived IDs:** Content-addressed IDs use UUIDv8 with SHA-256:
+**Derived IDs:** Content-addressed IDs SHOULD use UUIDv8 with SHA-256:
 
 ```
 derived_uuid(input_bytes) -> UUID:
@@ -73,10 +71,6 @@ Entity {
 Values are unique per (entityId, propertyId), or per (entityId, propertyId, language) for TEXT values. When multiple values for a given (entity, property) pair are required, use relations instead.
 
 Type membership is expressed via `Types` relations (Section 7.3), not a dedicated types field.
-
-**Lifecycle states:**
-- `ACTIVE` — Entity exists and accepts updates
-- `DELETED` — Entity is tombstoned; subsequent updates are ignored
 
 ### 2.3 Types
 
@@ -279,14 +273,14 @@ Relations are directed edges with an associated entity for reification.
 ```
 Relation {
   id: ID
-  entity: ID           // Reified entity representing this relation
   type: ID
   from: ID             // Source entity
-  to: ID               // Target entity
   from_space: ID?      // Optional space pin for source
   from_version: ID?    // Optional version pin for source
+  to: ID               // Target entity
   to_space: ID?        // Optional space pin for target
   to_version: ID?      // Optional version pin for target
+  entity: ID           // Reified entity representing this relation
   position: string?
 }
 ```
@@ -396,7 +390,7 @@ CreateEntity {
 }
 ```
 
-**Semantics (NORMATIVE):** If the entity does not exist, create it. If it already exists, this acts as an update: values are applied as `set_properties` (LWW replace per property).
+**Semantics (NORMATIVE):** If the entity does not exist, create it. If it already exists, this acts as an update: values are applied as `set` (LWW replace per property).
 
 > **Note:** CreateEntity is effectively an "upsert" operation. This is intentional: it simplifies edit generation (no need to track whether an entity exists) and supports idempotent replay. However, callers should be aware that CreateEntity on an existing entity will **replace** values for any properties included in the op.
 
@@ -404,8 +398,8 @@ CreateEntity {
 ```
 UpdateEntity {
   id: ID
-  set_properties: List<Value>?        // LWW replace
-  unset_properties: List<UnsetProperty>?
+  set: List<Value>?            // LWW replace
+  unset: List<UnsetProperty>?
 }
 
 UnsetProperty {
@@ -416,18 +410,18 @@ UnsetProperty {
 
 | Field | Strategy | Use Case |
 |-------|----------|----------|
-| `set_properties` | LWW Replace | Name, Age |
-| `unset_properties` | Clear | Reset property or specific language |
+| `set` | LWW Replace | Name, Age |
+| `unset` | Clear | Reset property or specific language |
 
-**`set_properties` semantics (NORMATIVE):** For a given property (and language, for TEXT), `set_properties` replaces the existing value. For TEXT values, each language is treated independently—setting a value for one language does not affect values in other languages.
+**`set` semantics (NORMATIVE):** For a given property (and language, for TEXT), `set` replaces the existing value. For TEXT values, each language is treated independently—setting a value for one language does not affect values in other languages.
 
-**`unset_properties` semantics (NORMATIVE):** Clears values for properties. For TEXT properties, the `language` field specifies which slot to clear: `ALL` clears all language slots, absent clears the non-linguistic slot, and a specific language ID clears that language slot. For non-TEXT properties, `language` MUST be `ALL` and the single value is cleared.
+**`unset` semantics (NORMATIVE):** Clears values for properties. For TEXT properties, the `language` field specifies which slot to clear: `ALL` clears all language slots, absent clears the non-linguistic slot, and a specific language ID clears that language slot. For non-TEXT properties, `language` MUST be `ALL` and the single value is cleared.
 
 **Application order within op (NORMATIVE):**
-1. `unset_properties`
-2. `set_properties`
+1. `unset`
+2. `set`
 
-> **Serializer rule:** The same (property, language) MUST NOT appear in both `set_properties` and `unset_properties`. Serializers SHOULD squash by keeping only the `set_properties` entry. See Section 3.6.
+> **Serializer rule:** The same (property, language) MUST NOT appear in both `set` and `unset`. Serializers SHOULD squash by keeping only the `set` entry. See Section 3.6.
 
 **DeleteEntity:**
 ```
@@ -578,7 +572,7 @@ Operations are validated **structurally** at write time and **semantically** at 
 
 Indexers are lenient and will process edits even if they contain redundant or contradictory operations. However, spec-compliant clients SHOULD NOT produce such edits. Serializers SHOULD automatically rewrite operations to ensure clean output.
 
-**Redundant property operations:** An UpdateEntity op MUST NOT include the same (property, language) in both `set_properties` and `unset_properties`. Serializers SHOULD squash by keeping only the `set_properties` entry (since unset is applied first, the set would overwrite anyway).
+**Redundant property operations:** An UpdateEntity op MUST NOT include the same (property, language) in both `set` and `unset`. Serializers SHOULD squash by keeping only the `set` entry (since unset is applied first, the set would overwrite anyway).
 
 **Redundant relation field operations:** An UpdateRelation op MUST NOT include the same field in both set and `unset`. Serializers SHOULD squash by keeping only the set value.
 
@@ -647,20 +641,20 @@ Where `op_index` is the zero-based index in the edit's `ops[]` array.
 
 All values use Last-Writer-Wins (LWW) semantics based on OpPosition. Values are unique per (entityId, propertyId, language) where language only applies to TEXT values.
 
-**`set_properties` (LWW):** Replaces the value for a property (and language, for TEXT). When concurrent edits both use `set_properties` on the same (property, language) combination, the op with the highest OpPosition wins.
+**`set` (LWW):** Replaces the value for a property (and language, for TEXT). When concurrent edits both use `set` on the same (property, language) combination, the op with the highest OpPosition wins.
 
 **Property value conflicts:**
 
 | Scenario | Resolution |
 |----------|------------|
-| Concurrent `set_properties` | Higher OpPosition wins (LWW) |
+| Concurrent `set` | Higher OpPosition wins (LWW) |
 | Delete vs Update | Delete wins (tombstone dominance) |
 
 **Structural conflicts:**
 
 | Conflict | Resolution |
 |----------|------------|
-| Create same entity ID | First creates; later creates apply values as `set_properties` (LWW) |
+| Create same entity ID | First creates; later creates apply values as `set` (LWW) |
 | Create same relation ID | First creates; later creates ignored (relations are immutable) |
 | Delete vs Delete | Idempotent |
 
@@ -711,9 +705,9 @@ Canonical encoding produces deterministic bytes for the same logical edit. Use c
 
 2. **Sorted authors:** The `authors` list MUST be sorted by ID bytes in ascending lexicographic order. Duplicate author IDs are NOT permitted.
 
-3. **Sorted value lists:** `CreateEntity.values` and `UpdateEntity.set_properties` MUST be sorted by `(propertyRef, languageRef)` in ascending order (property index first, then language index). Duplicate `(property, language)` entries are NOT permitted.
+3. **Sorted value lists:** `CreateEntity.values` and `UpdateEntity.set` MUST be sorted by `(propertyRef, languageRef)` in ascending order (property index first, then language index). Duplicate `(property, language)` entries are NOT permitted.
 
-4. **Sorted unset lists:** `UpdateEntity.unset_properties` MUST be sorted by `(propertyRef, language)` in ascending order. Duplicate entries (same property and language) are NOT permitted.
+4. **Sorted unset lists:** `UpdateEntity.unset` MUST be sorted by `(propertyRef, language)` in ascending order. Duplicate entries (same property and language) are NOT permitted.
 
 5. **Minimal varints:** (Note: This is now a general requirement per Section 6.1, not canonical-only.)
 
@@ -778,7 +772,7 @@ zigzag(n) = (n << 1) ^ (n >> 63)
 
 **String:** Varint length prefix + UTF-8 bytes
 
-**UUID:** Raw 16 bytes (no length prefix)
+**UUID:** Raw 16 bytes (no length prefix), big-endian (network byte order). Byte `i` corresponds to hex digits `2i` and `2i+1` of the standard 32-character hex string. For example, UUID `550e8400-e29b-41d4-a716-446655440000` is encoded as bytes `[0x55, 0x0e, 0x84, 0x00, 0xe2, 0x9b, ...]`.
 
 **Float endianness (NORMATIVE):** All IEEE 754 floats (FLOAT64, POINT, EMBEDDING float32) are little-endian.
 
@@ -874,16 +868,16 @@ values: Value[]
 ```
 id: ObjectRef
 flags: uint8
-  bit 0 = has_set_properties
-  bit 1 = has_unset_properties
+  bit 0 = has_set
+  bit 1 = has_unset
   bits 2-7 = reserved (must be 0)
 
-[if has_set_properties]:
+[if has_set]:
   count: varint
   values: Value[]
-[if has_unset_properties]:
+[if has_unset]:
   count: varint
-  unset_properties: UnsetProperty[]
+  unset: UnsetProperty[]
 
 UnsetProperty:
   property: PropertyRef
@@ -1091,8 +1085,8 @@ Indexers MUST reject edits that fail structural validation:
 | Reference indices | Index ≥ respective dictionary count |
 | Dictionary duplicates | Same ID appears twice in any dictionary |
 | Author duplicates | Same author ID appears twice (canonical mode) |
-| Value duplicates | Same `(property, language)` appears twice in values/set_properties (canonical mode) |
-| Unset duplicates | Same `(property, language)` appears twice in unset_properties (canonical mode) |
+| Value duplicates | Same `(property, language)` appears twice in values/set (canonical mode) |
+| Unset duplicates | Same `(property, language)` appears twice in unset (canonical mode) |
 | Language indices (TEXT) | Index not 0xFFFFFFFF and index > 0 and (index - 1) ≥ language_count |
 | UnsetProperty language (non-TEXT) | Language value is not 0xFFFFFFFF |
 | Unit indices (numerical) | Index > 0 and (index - 1) ≥ unit_count |

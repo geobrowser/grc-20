@@ -210,12 +210,12 @@ function buildDictionaries(ops: Op[]): DictionaryBuilder {
 
       case "updateEntity":
         addObject(op.id);
-        for (const pv of op.setProperties) {
+        for (const pv of op.set) {
           processPropertyValue(pv);
         }
-        for (const unset of op.unsetProperties) {
-          addProperty(unset.property, DataType.Text); // Assume TEXT for unset properties
-          processUnsetLanguage(unset.language);
+        for (const u of op.unset) {
+          addProperty(u.property, DataType.Text); // Assume TEXT for unset properties
+          processUnsetLanguage(u.language);
         }
         break;
 

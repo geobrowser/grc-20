@@ -113,8 +113,8 @@ export class EditBuilder {
     this.ops.push({
       type: "updateEntity",
       id: builder.id,
-      setProperties: builder.getSetProperties(),
-      unsetProperties: builder.getUnsetProperties(),
+      set: builder.getSet(),
+      unset: builder.getUnset(),
     });
     return this;
   }

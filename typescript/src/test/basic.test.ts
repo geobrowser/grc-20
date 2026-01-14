@@ -191,8 +191,8 @@ describe("EditBuilder", () => {
 
     const op = edit.ops[0];
     if (op.type === "updateEntity") {
-      expect(op.setProperties.length).toBe(1);
-      expect(op.unsetProperties.length).toBe(1);
+      expect(op.set.length).toBe(1);
+      expect(op.unset.length).toBe(1);
     }
   });
 });

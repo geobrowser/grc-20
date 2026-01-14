@@ -43,14 +43,14 @@ export interface CreateEntity {
  * Updates an existing entity (spec Section 3.2).
  *
  * Application order within op:
- * 1. unsetProperties
- * 2. setProperties
+ * 1. unset
+ * 2. set
  */
 export interface UpdateEntity {
   type: "updateEntity";
   id: Id;
-  setProperties: PropertyValue[];
-  unsetProperties: UnsetProperty[];
+  set: PropertyValue[];
+  unset: UnsetProperty[];
 }
 
 /**
