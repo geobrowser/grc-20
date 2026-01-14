@@ -233,19 +233,19 @@ Dense vector for semantic similarity search.
 
 ```
 EMBEDDING {
-  sub_type: uint8       // 0x00=float32, 0x01=int8, 0x02=binary
-  dimensions: varint
-  data: raw_bytes
+  sub_type: FLOAT32 | INT8 | BINARY
+  dimensions: int
+  data: bytes
 }
 ```
 
-| Sub-type | Encoding | Bytes per dim |
-|----------|----------|---------------|
-| 0x00 float32 | IEEE 754, little-endian | 4 |
-| 0x01 int8 | Signed byte | 1 |
-| 0x02 binary | Bit-packed, LSB-first | 1/8 |
+| Sub-type | Description | Bytes per dim |
+|----------|-------------|---------------|
+| FLOAT32 | IEEE 754 single-precision | 4 |
+| INT8 | Signed 8-bit integer | 1 |
+| BINARY | Bit-packed | 1/8 |
 
-**Binary bit order (NORMATIVE):** For subtype 0x02, dimension `i` maps to byte `i / 8`, bit position `i % 8` where bit 0 is the least significant bit. Bits beyond `dims` in the final byte MUST be zero.
+**Binary bit order (NORMATIVE):** For BINARY subtype, dimension `i` maps to byte `i / 8`, bit position `i % 8` where bit 0 is the least significant bit. Bits beyond `dims` in the final byte MUST be zero.
 
 ### 2.5 Values
 
@@ -253,14 +253,14 @@ A value is a property instance on an object:
 
 ```
 Value {
-  property: index
-  value: bytes
+  property: ID
+  value: <type-specific>
   language: ID?    // TEXT only: language entity reference
   unit: ID?        // INT64, FLOAT64, DECIMAL only: unit entity reference
 }
 ```
 
-The value's type is determined by the property's `data_type`.
+The value encoding is determined by the property's `data_type`.
 
 **Value uniqueness:**
 
@@ -280,7 +280,7 @@ Relations are directed edges with an associated entity for reification.
 Relation {
   id: ID
   entity: ID           // Reified entity representing this relation
-  type: ID | index
+  type: ID
   from: ID             // Source entity
   to: ID               // Target entity
   from_space: ID?      // Optional space pin for source
@@ -403,14 +403,14 @@ CreateEntity {
 **UpdateEntity:**
 ```
 UpdateEntity {
-  id: ID | index
+  id: ID
   set_properties: List<Value>?        // LWW replace
   unset_properties: List<UnsetProperty>?
 }
 
 UnsetProperty {
-  property: ID | index
-  language: uint32    // 0xFFFFFFFF = clear all, 0 = non-linguistic, 1+ = specific language
+  property: ID
+  language: ALL | ID?    // TEXT only: ALL = clear all, absent = non-linguistic, ID = specific language
 }
 ```
 
@@ -421,7 +421,7 @@ UnsetProperty {
 
 **`set_properties` semantics (NORMATIVE):** For a given property (and language, for TEXT), `set_properties` replaces the existing value. For TEXT values, each language is treated independently—setting a value for one language does not affect values in other languages.
 
-**`unset_properties` semantics (NORMATIVE):** Clears values for properties. For TEXT properties, the `language` field specifies which slot to clear: `0xFFFFFFFF` clears all language slots, `0` clears the non-linguistic slot, and `1+` clears a specific language slot. For non-TEXT properties, `language` MUST be `0xFFFFFFFF` (clear all) and the single value is cleared.
+**`unset_properties` semantics (NORMATIVE):** Clears values for properties. For TEXT properties, the `language` field specifies which slot to clear: `ALL` clears all language slots, absent clears the non-linguistic slot, and a specific language ID clears that language slot. For non-TEXT properties, `language` MUST be `ALL` and the single value is cleared.
 
 **Application order within op (NORMATIVE):**
 1. `unset_properties`
@@ -432,7 +432,7 @@ UnsetProperty {
 **DeleteEntity:**
 ```
 DeleteEntity {
-  id: ID | index
+  id: ID
 }
 ```
 
@@ -449,7 +449,7 @@ Transitions the entity to DELETED state (tombstoned).
 **RestoreEntity:**
 ```
 RestoreEntity {
-  id: ID | index
+  id: ID
 }
 ```
 
@@ -468,11 +468,11 @@ Transitions a DELETED entity back to ACTIVE state.
 ```
 CreateRelation {
   id: ID
-  type: ID | index
-  from: ID | index
+  type: ID
+  from: ID
   from_space: ID?          // Optional space pin for source
   from_version: ID?        // Optional version pin for source
-  to: ID | index
+  to: ID
   to_space: ID?            // Optional space pin for target
   to_version: ID?          // Optional version pin for target
   entity: ID?              // Explicit reified entity; absent = auto-derived
@@ -493,7 +493,7 @@ CreateRelation {
 **UpdateRelation:**
 ```
 UpdateRelation {
-  id: ID | index
+  id: ID
   from_space: ID?          // Set space pin for source
   from_version: ID?        // Set version pin for source
   to_space: ID?            // Set space pin for target
@@ -514,7 +514,7 @@ Updates the relation's mutable fields. Use `unset` to clear a field (remove a pi
 **DeleteRelation:**
 ```
 DeleteRelation {
-  id: ID | index
+  id: ID
 }
 ```
 
@@ -530,7 +530,7 @@ Transitions the relation to DELETED state (tombstoned).
 **RestoreRelation:**
 ```
 RestoreRelation {
-  id: ID | index
+  id: ID
 }
 ```
 
