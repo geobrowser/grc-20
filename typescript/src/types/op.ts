@@ -2,19 +2,22 @@ import type { Id } from "./id.js";
 import type { DataType, PropertyValue } from "./value.js";
 
 /**
- * Relation ID mode for CreateRelation.
- */
-export type RelationIdMode =
-  | { type: "unique" }
-  | { type: "many"; id: Id };
-
-/**
  * Specifies which language slot to clear for an UnsetProperty.
  */
 export type UnsetLanguage =
   | { type: "all" }
   | { type: "nonLinguistic" }
   | { type: "specific"; language: Id };
+
+/**
+ * Fields that can be unset on a relation.
+ */
+export type UnsetRelationField =
+  | "fromSpace"
+  | "fromVersion"
+  | "toSpace"
+  | "toVersion"
+  | "position";
 
 /**
  * Specifies a property to unset, with optional language targeting (TEXT only).
@@ -73,7 +76,7 @@ export interface RestoreEntity {
  */
 export interface CreateRelation {
   type: "createRelation";
-  idMode: RelationIdMode;
+  id: Id;
   relationType: Id;
   from: Id;
   to: Id;
@@ -86,14 +89,24 @@ export interface CreateRelation {
 }
 
 /**
- * Updates a relation's position (spec Section 3.3).
+ * Updates a relation's mutable fields (spec Section 3.3).
  *
- * All other fields are immutable.
+ * The structural fields (entity, type, from, to) are immutable.
+ * The space pins, version pins, and position can be updated or unset.
+ *
+ * Application order within op:
+ * 1. unset
+ * 2. set fields
  */
 export interface UpdateRelation {
   type: "updateRelation";
   id: Id;
+  fromSpace?: Id;
+  fromVersion?: Id;
+  toSpace?: Id;
+  toVersion?: Id;
   position?: string;
+  unset: UnsetRelationField[];
 }
 
 /**

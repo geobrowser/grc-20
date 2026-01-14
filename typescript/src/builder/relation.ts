@@ -1,11 +1,11 @@
 import type { Id } from "../types/id.js";
-import type { CreateRelation, RelationIdMode } from "../types/op.js";
+import type { CreateRelation } from "../types/op.js";
 
 /**
  * Builder for CreateRelation operations with full control.
  */
 export class RelationBuilder {
-  private idMode?: RelationIdMode;
+  private _id?: Id;
   private relationType?: Id;
   private from?: Id;
   private to?: Id;
@@ -17,18 +17,10 @@ export class RelationBuilder {
   private toVersion?: Id;
 
   /**
-   * Sets unique mode (ID derived from from+to+type).
+   * Sets the relation ID.
    */
-  unique(): this {
-    this.idMode = { type: "unique" };
-    return this;
-  }
-
-  /**
-   * Sets many mode with an explicit relation ID.
-   */
-  many(id: Id): this {
-    this.idMode = { type: "many", id };
+  id(id: Id): this {
+    this._id = id;
     return this;
   }
 
@@ -57,7 +49,7 @@ export class RelationBuilder {
   }
 
   /**
-   * Sets an explicit reified entity ID (many mode only).
+   * Sets an explicit reified entity ID.
    */
   reifiedEntity(id: Id): this {
     this.entity = id;
@@ -108,13 +100,13 @@ export class RelationBuilder {
    * Builds the CreateRelation, returning undefined if required fields are missing.
    */
   build(): CreateRelation | undefined {
-    if (!this.idMode || !this.relationType || !this.from || !this.to) {
+    if (!this._id || !this.relationType || !this.from || !this.to) {
       return undefined;
     }
 
     return {
       type: "createRelation",
-      idMode: this.idMode,
+      id: this._id,
       relationType: this.relationType,
       from: this.from,
       to: this.to,

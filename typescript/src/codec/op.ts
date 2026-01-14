@@ -10,6 +10,7 @@ import type {
   RestoreRelation,
   UnsetLanguage,
   UnsetProperty,
+  UnsetRelationField,
   UpdateEntity,
   UpdateRelation,
 } from "../types/op.js";
@@ -61,8 +62,19 @@ const RELATION_HAS_TO_VERSION = 0x08;
 const RELATION_HAS_ENTITY = 0x10;
 const RELATION_HAS_POSITION = 0x20;
 
-// UpdateRelation flags
-const UPDATE_REL_HAS_POSITION = 0x01;
+// UpdateRelation set flags
+const UPDATE_REL_SET_FROM_SPACE = 0x01;
+const UPDATE_REL_SET_FROM_VERSION = 0x02;
+const UPDATE_REL_SET_TO_SPACE = 0x04;
+const UPDATE_REL_SET_TO_VERSION = 0x08;
+const UPDATE_REL_SET_POSITION = 0x10;
+
+// UpdateRelation unset flags
+const UPDATE_REL_UNSET_FROM_SPACE = 0x01;
+const UPDATE_REL_UNSET_FROM_VERSION = 0x02;
+const UPDATE_REL_UNSET_TO_SPACE = 0x04;
+const UPDATE_REL_UNSET_TO_VERSION = 0x08;
+const UPDATE_REL_UNSET_POSITION = 0x10;
 
 /**
  * Encodes a single operation.
@@ -164,13 +176,8 @@ function encodeRestoreEntity(writer: Writer, op: RestoreEntity, dicts: OpDiction
 function encodeCreateRelation(writer: Writer, op: CreateRelation, dicts: OpDictionaryIndices): void {
   writer.writeByte(OP_TYPE_CREATE_RELATION);
 
-  // Mode: 0 = unique, 1 = many
-  if (op.idMode.type === "unique") {
-    writer.writeByte(0);
-  } else {
-    writer.writeByte(1);
-    writer.writeId(op.idMode.id);
-  }
+  // Relation ID (always explicit)
+  writer.writeId(op.id);
 
   // Type, from, to
   writer.writeVarintNumber(dicts.getRelationTypeIndex(op.relationType));
@@ -200,13 +207,44 @@ function encodeUpdateRelation(writer: Writer, op: UpdateRelation, dicts: OpDicti
   writer.writeByte(OP_TYPE_UPDATE_RELATION);
   writer.writeVarintNumber(dicts.getObjectIndex(op.id));
 
-  let flags = 0;
-  if (op.position !== undefined) flags |= UPDATE_REL_HAS_POSITION;
-  writer.writeByte(flags);
+  // Set flags
+  let setFlags = 0;
+  if (op.fromSpace !== undefined) setFlags |= UPDATE_REL_SET_FROM_SPACE;
+  if (op.fromVersion !== undefined) setFlags |= UPDATE_REL_SET_FROM_VERSION;
+  if (op.toSpace !== undefined) setFlags |= UPDATE_REL_SET_TO_SPACE;
+  if (op.toVersion !== undefined) setFlags |= UPDATE_REL_SET_TO_VERSION;
+  if (op.position !== undefined) setFlags |= UPDATE_REL_SET_POSITION;
+  writer.writeByte(setFlags);
 
-  if (op.position !== undefined) {
-    writer.writeString(op.position);
+  // Unset flags
+  let unsetFlags = 0;
+  for (const field of op.unset) {
+    switch (field) {
+      case "fromSpace":
+        unsetFlags |= UPDATE_REL_UNSET_FROM_SPACE;
+        break;
+      case "fromVersion":
+        unsetFlags |= UPDATE_REL_UNSET_FROM_VERSION;
+        break;
+      case "toSpace":
+        unsetFlags |= UPDATE_REL_UNSET_TO_SPACE;
+        break;
+      case "toVersion":
+        unsetFlags |= UPDATE_REL_UNSET_TO_VERSION;
+        break;
+      case "position":
+        unsetFlags |= UPDATE_REL_UNSET_POSITION;
+        break;
+    }
   }
+  writer.writeByte(unsetFlags);
+
+  // Write set field values
+  if (op.fromSpace !== undefined) writer.writeId(op.fromSpace);
+  if (op.fromVersion !== undefined) writer.writeId(op.fromVersion);
+  if (op.toSpace !== undefined) writer.writeId(op.toSpace);
+  if (op.toVersion !== undefined) writer.writeId(op.toVersion);
+  if (op.position !== undefined) writer.writeString(op.position);
 }
 
 function encodeDeleteRelation(writer: Writer, op: DeleteRelation, dicts: OpDictionaryIndices): void {
@@ -326,15 +364,8 @@ function decodeRestoreEntity(reader: Reader, dicts: OpDictionaryLookups): Restor
 }
 
 function decodeCreateRelation(reader: Reader, dicts: OpDictionaryLookups): CreateRelation {
-  const mode = reader.readByte();
-  let idMode: CreateRelation["idMode"];
-  if (mode === 0) {
-    idMode = { type: "unique" };
-  } else if (mode === 1) {
-    idMode = { type: "many", id: reader.readId() };
-  } else {
-    throw new DecodeError("E005", `invalid relation mode: ${mode}`);
-  }
+  // Relation ID (always explicit)
+  const id = reader.readId();
 
   const relationType = dicts.getRelationType(reader.readVarintNumber());
   const from = dicts.getObject(reader.readVarintNumber());
@@ -353,14 +384,9 @@ function decodeCreateRelation(reader: Reader, dicts: OpDictionaryLookups): Creat
   const entity = flags & RELATION_HAS_ENTITY ? reader.readId() : undefined;
   const position = flags & RELATION_HAS_POSITION ? reader.readString() : undefined;
 
-  // Validate: unique mode cannot have explicit entity
-  if (mode === 0 && entity) {
-    throw new DecodeError("E005", "unique mode relation cannot have explicit entity");
-  }
-
   return {
     type: "createRelation",
-    idMode,
+    id,
     relationType,
     from,
     to,
@@ -375,16 +401,46 @@ function decodeCreateRelation(reader: Reader, dicts: OpDictionaryLookups): Creat
 
 function decodeUpdateRelation(reader: Reader, dicts: OpDictionaryLookups): UpdateRelation {
   const id = dicts.getObject(reader.readVarintNumber());
-  const flags = reader.readByte();
 
-  // Check reserved bits
-  if ((flags & 0xfe) !== 0) {
-    throw new DecodeError("E005", "reserved bits are non-zero in UpdateRelation flags");
+  // Read set flags
+  const setFlags = reader.readByte();
+  // Check reserved bits in set flags
+  if ((setFlags & 0xe0) !== 0) {
+    throw new DecodeError("E005", "reserved bits are non-zero in UpdateRelation set flags");
   }
 
-  const position = flags & UPDATE_REL_HAS_POSITION ? reader.readString() : undefined;
+  // Read unset flags
+  const unsetFlags = reader.readByte();
+  // Check reserved bits in unset flags
+  if ((unsetFlags & 0xe0) !== 0) {
+    throw new DecodeError("E005", "reserved bits are non-zero in UpdateRelation unset flags");
+  }
 
-  return { type: "updateRelation", id, position };
+  // Read set field values
+  const fromSpace = setFlags & UPDATE_REL_SET_FROM_SPACE ? reader.readId() : undefined;
+  const fromVersion = setFlags & UPDATE_REL_SET_FROM_VERSION ? reader.readId() : undefined;
+  const toSpace = setFlags & UPDATE_REL_SET_TO_SPACE ? reader.readId() : undefined;
+  const toVersion = setFlags & UPDATE_REL_SET_TO_VERSION ? reader.readId() : undefined;
+  const position = setFlags & UPDATE_REL_SET_POSITION ? reader.readString() : undefined;
+
+  // Decode unset fields
+  const unset: UnsetRelationField[] = [];
+  if (unsetFlags & UPDATE_REL_UNSET_FROM_SPACE) unset.push("fromSpace");
+  if (unsetFlags & UPDATE_REL_UNSET_FROM_VERSION) unset.push("fromVersion");
+  if (unsetFlags & UPDATE_REL_UNSET_TO_SPACE) unset.push("toSpace");
+  if (unsetFlags & UPDATE_REL_UNSET_TO_VERSION) unset.push("toVersion");
+  if (unsetFlags & UPDATE_REL_UNSET_POSITION) unset.push("position");
+
+  return {
+    type: "updateRelation",
+    id,
+    fromSpace,
+    fromVersion,
+    toSpace,
+    toVersion,
+    position,
+    unset,
+  };
 }
 
 function decodeDeleteRelation(reader: Reader, dicts: OpDictionaryLookups): DeleteRelation {

@@ -10,8 +10,8 @@ export enum DataType {
   Decimal = 4,
   Text = 5,
   Bytes = 6,
-  Timestamp = 7,
-  Date = 8,
+  Date = 7,
+  Schedule = 8,
   Point = 9,
   Embedding = 10,
 }
@@ -59,9 +59,9 @@ export type Value =
   | { type: "decimal"; exponent: number; mantissa: DecimalMantissa; unit?: Id }
   | { type: "text"; value: string; language?: Id }
   | { type: "bytes"; value: Uint8Array }
-  | { type: "timestamp"; value: bigint }
   | { type: "date"; value: string }
-  | { type: "point"; lat: number; lon: number }
+  | { type: "schedule"; value: string }
+  | { type: "point"; lon: number; lat: number; alt?: number }
   | { type: "embedding"; subType: EmbeddingSubType; dims: number; data: Uint8Array };
 
 /**
@@ -81,10 +81,10 @@ export function valueDataType(value: Value): DataType {
       return DataType.Text;
     case "bytes":
       return DataType.Bytes;
-    case "timestamp":
-      return DataType.Timestamp;
     case "date":
       return DataType.Date;
+    case "schedule":
+      return DataType.Schedule;
     case "point":
       return DataType.Point;
     case "embedding":
@@ -136,14 +136,17 @@ export function validateValue(value: Value): string | undefined {
       break;
     }
     case "point":
-      if (value.lat < -90 || value.lat > 90) {
-        return "latitude out of range [-90, +90]";
-      }
       if (value.lon < -180 || value.lon > 180) {
         return "longitude out of range [-180, +180]";
       }
-      if (Number.isNaN(value.lat) || Number.isNaN(value.lon)) {
+      if (value.lat < -90 || value.lat > 90) {
+        return "latitude out of range [-90, +90]";
+      }
+      if (Number.isNaN(value.lon) || Number.isNaN(value.lat)) {
         return "NaN is not allowed in Point coordinates";
+      }
+      if (value.alt !== undefined && Number.isNaN(value.alt)) {
+        return "NaN is not allowed in Point altitude";
       }
       break;
     case "embedding": {

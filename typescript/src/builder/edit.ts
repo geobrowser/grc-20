@@ -3,11 +3,13 @@ import type { Edit } from "../types/edit.js";
 import type {
   CreateRelation,
   Op,
+  UnsetRelationField,
 } from "../types/op.js";
 import { DataType } from "../types/value.js";
 import { EntityBuilder } from "./entity.js";
 import { UpdateEntityBuilder } from "./update.js";
 import { RelationBuilder } from "./relation.js";
+import { UpdateRelationBuilder } from "./update-relation.js";
 
 /**
  * Builder for constructing an Edit with operations.
@@ -139,26 +141,12 @@ export class EditBuilder {
   // =========================================================================
 
   /**
-   * Adds a CreateRelation operation in unique mode (ID derived from endpoints + type).
+   * Adds a simple CreateRelation operation with explicit ID.
    */
-  createRelationUnique(from: Id, to: Id, relationType: Id): this {
+  createRelationSimple(id: Id, from: Id, to: Id, relationType: Id): this {
     this.ops.push({
       type: "createRelation",
-      idMode: { type: "unique" },
-      relationType,
-      from,
-      to,
-    });
-    return this;
-  }
-
-  /**
-   * Adds a CreateRelation operation in many mode (explicit ID).
-   */
-  createRelationMany(id: Id, from: Id, to: Id, relationType: Id): this {
-    this.ops.push({
-      type: "createRelation",
-      idMode: { type: "many", id },
+      id,
       relationType,
       from,
       to,
@@ -187,10 +175,11 @@ export class EditBuilder {
   }
 
   /**
-   * Adds an UpdateRelation operation (can only update position).
+   * Adds an UpdateRelation operation using a builder function.
    */
-  updateRelation(id: Id, position?: string): this {
-    this.ops.push({ type: "updateRelation", id, position });
+  updateRelation(id: Id, build: (b: UpdateRelationBuilder) => UpdateRelationBuilder): this {
+    const builder = build(new UpdateRelationBuilder(id));
+    this.ops.push(builder.build());
     return this;
   }
 

@@ -86,12 +86,12 @@ export class UpdateEntityBuilder {
   }
 
   /**
-   * Sets a POINT value.
+   * Sets a POINT value (longitude, latitude, optional altitude).
    */
-  setPoint(property: Id, lat: number, lon: number): this {
+  setPoint(property: Id, lon: number, lat: number, alt?: number): this {
     this.setProperties.push({
       property,
-      value: { type: "point", lat, lon },
+      value: { type: "point", lon, lat, alt },
     });
     return this;
   }
@@ -108,12 +108,12 @@ export class UpdateEntityBuilder {
   }
 
   /**
-   * Sets a TIMESTAMP value.
+   * Sets a SCHEDULE value (RFC 5545 iCalendar format).
    */
-  setTimestamp(property: Id, micros: bigint): this {
+  setSchedule(property: Id, value: string): this {
     this.setProperties.push({
       property,
-      value: { type: "timestamp", value: micros },
+      value: { type: "schedule", value },
     });
     return this;
   }

@@ -148,17 +148,18 @@ describe("EditBuilder", () => {
     expect(edit.ops[0].type).toBe("createEntity");
   });
 
-  it("creates relations in unique and many mode", () => {
+  it("creates relations with explicit IDs", () => {
     const editId = randomId();
     const from = randomId();
     const to = randomId();
-    const relId = randomId();
+    const relId1 = randomId();
+    const relId2 = randomId();
 
     const edit = new EditBuilder(editId)
       .createEmptyEntity(from)
       .createEmptyEntity(to)
-      .createRelationUnique(from, to, relationTypes.types())
-      .createRelationMany(relId, from, to, relationTypes.types())
+      .createRelationSimple(relId1, from, to, relationTypes.types())
+      .createRelationSimple(relId2, from, to, relationTypes.types())
       .build();
 
     expect(edit.ops.length).toBe(4);
@@ -168,8 +169,8 @@ describe("EditBuilder", () => {
     const rel1 = edit.ops[2];
     const rel2 = edit.ops[3];
     if (rel1.type === "createRelation" && rel2.type === "createRelation") {
-      expect(rel1.idMode.type).toBe("unique");
-      expect(rel2.idMode.type).toBe("many");
+      expect(idsEqual(rel1.id, relId1)).toBe(true);
+      expect(idsEqual(rel2.id, relId2)).toBe(true);
     }
   });
 
@@ -236,9 +237,9 @@ describe("Codec", () => {
          .float64(parseId("33333333333333333333333333333333")!, 3.14159, undefined)
          .text(parseId("44444444444444444444444444444444")!, "Hello World", undefined)
          .bytes(parseId("55555555555555555555555555555555")!, new Uint8Array([1, 2, 3, 4]))
-         .timestamp(parseId("66666666666666666666666666666666")!, 1704067200000000n)
+         .schedule(parseId("66666666666666666666666666666666")!, "FREQ=WEEKLY;BYDAY=MO")
          .date(parseId("77777777777777777777777777777777")!, "2024-01-15")
-         .point(parseId("88888888888888888888888888888888")!, 40.7128, -74.006)
+         .point(parseId("88888888888888888888888888888888")!, -74.006, 40.7128)
       )
       .build();
 
@@ -269,8 +270,8 @@ describe("Codec", () => {
 
       const pointVal = op.values.find(v => v.value.type === "point");
       if (pointVal?.value.type === "point") {
-        expect(pointVal.value.lat).toBeCloseTo(40.7128, 4);
         expect(pointVal.value.lon).toBeCloseTo(-74.006, 3);
+        expect(pointVal.value.lat).toBeCloseTo(40.7128, 4);
       }
     }
   });
@@ -279,11 +280,12 @@ describe("Codec", () => {
     const editId = randomId();
     const from = randomId();
     const to = randomId();
+    const relId = randomId();
 
     const edit = new EditBuilder(editId)
       .createEmptyEntity(from)
       .createEmptyEntity(to)
-      .createRelationUnique(from, to, relationTypes.types())
+      .createRelationSimple(relId, from, to, relationTypes.types())
       .build();
 
     const encoded = encodeEdit(edit);
@@ -294,7 +296,7 @@ describe("Codec", () => {
     expect(rel.type).toBe("createRelation");
 
     if (rel.type === "createRelation") {
-      expect(rel.idMode.type).toBe("unique");
+      expect(idsEqual(rel.id, relId)).toBe(true);
       expect(idsEqual(rel.from, from)).toBe(true);
       expect(idsEqual(rel.to, to)).toBe(true);
     }
@@ -312,7 +314,7 @@ describe("Codec", () => {
       )
       .deleteEntity(entityId)
       .restoreEntity(entityId)
-      .updateRelation(relationId, "abc")
+      .updateRelation(relationId, (u) => u.setPosition("abc"))
       .deleteRelation(relationId)
       .restoreRelation(relationId)
       .build();

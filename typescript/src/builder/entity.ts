@@ -72,12 +72,12 @@ export class EntityBuilder {
   }
 
   /**
-   * Adds a POINT value (latitude, longitude).
+   * Adds a POINT value (longitude, latitude, optional altitude).
    */
-  point(property: Id, lat: number, lon: number): this {
+  point(property: Id, lon: number, lat: number, alt?: number): this {
     this.values.push({
       property,
-      value: { type: "point", lat, lon },
+      value: { type: "point", lon, lat, alt },
     });
     return this;
   }
@@ -94,12 +94,12 @@ export class EntityBuilder {
   }
 
   /**
-   * Adds a TIMESTAMP value (microseconds since Unix epoch).
+   * Adds a SCHEDULE value (RFC 5545 iCalendar format).
    */
-  timestamp(property: Id, micros: bigint): this {
+  schedule(property: Id, value: string): this {
     this.values.push({
       property,
-      value: { type: "timestamp", value: micros },
+      value: { type: "schedule", value },
     });
     return this;
   }

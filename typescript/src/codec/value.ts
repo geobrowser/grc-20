@@ -54,26 +54,36 @@ export function encodeValuePayload(writer: Writer, value: Value): void {
       writer.writeLengthPrefixedBytes(value.value);
       break;
 
-    case "timestamp":
-      writer.writeSignedVarint(value.value);
-      break;
-
     case "date":
       writer.writeString(value.value);
       break;
 
+    case "schedule":
+      writer.writeString(value.value);
+      break;
+
     case "point":
-      if (Number.isNaN(value.lat) || Number.isNaN(value.lon)) {
+      if (Number.isNaN(value.lon) || Number.isNaN(value.lat)) {
         throw new Error("NaN is not allowed in Point coordinates");
-      }
-      if (value.lat < -90 || value.lat > 90) {
-        throw new Error("latitude out of range [-90, +90]");
       }
       if (value.lon < -180 || value.lon > 180) {
         throw new Error("longitude out of range [-180, +180]");
       }
-      writer.writeFloat64(value.lat);
+      if (value.lat < -90 || value.lat > 90) {
+        throw new Error("latitude out of range [-90, +90]");
+      }
+      if (value.alt !== undefined && Number.isNaN(value.alt)) {
+        throw new Error("NaN is not allowed in Point altitude");
+      }
+      // Write ordinate count: 2 for 2D, 3 for 3D
+      const ordinateCount = value.alt !== undefined ? 3 : 2;
+      writer.writeByte(ordinateCount);
+      // Write in wire order: longitude, latitude, altitude (optional)
       writer.writeFloat64(value.lon);
+      writer.writeFloat64(value.lat);
+      if (value.alt !== undefined) {
+        writer.writeFloat64(value.alt);
+      }
       break;
 
     case "embedding": {
@@ -182,29 +192,38 @@ export function decodeValuePayload(reader: Reader, dataType: DataType): Value {
       return { type: "bytes", value };
     }
 
-    case DataType.Timestamp: {
-      const value = reader.readSignedVarint();
-      return { type: "timestamp", value };
-    }
-
     case DataType.Date: {
       const value = reader.readString();
       return { type: "date", value };
     }
 
+    case DataType.Schedule: {
+      const value = reader.readString();
+      return { type: "schedule", value };
+    }
+
     case DataType.Point: {
-      const lat = reader.readFloat64();
-      const lon = reader.readFloat64();
-      if (Number.isNaN(lat) || Number.isNaN(lon)) {
-        throw new DecodeError("E005", "NaN is not allowed in Point coordinates");
+      const ordinateCount = reader.readByte();
+      if (ordinateCount !== 2 && ordinateCount !== 3) {
+        throw new DecodeError("E005", `POINT ordinate_count must be 2 or 3, got ${ordinateCount}`);
       }
-      if (lat < -90 || lat > 90) {
-        throw new DecodeError("E005", `POINT latitude ${lat} out of range [-90, +90]`);
+      // Read in wire order: longitude, latitude, altitude (optional)
+      const lon = reader.readFloat64();
+      const lat = reader.readFloat64();
+      const alt = ordinateCount === 3 ? reader.readFloat64() : undefined;
+      if (Number.isNaN(lon) || Number.isNaN(lat)) {
+        throw new DecodeError("E005", "NaN is not allowed in Point coordinates");
       }
       if (lon < -180 || lon > 180) {
         throw new DecodeError("E005", `POINT longitude ${lon} out of range [-180, +180]`);
       }
-      return { type: "point", lat, lon };
+      if (lat < -90 || lat > 90) {
+        throw new DecodeError("E005", `POINT latitude ${lat} out of range [-90, +90]`);
+      }
+      if (alt !== undefined && Number.isNaN(alt)) {
+        throw new DecodeError("E005", "NaN is not allowed in Point altitude");
+      }
+      return { type: "point", lon, lat, alt };
     }
 
     case DataType.Embedding: {
