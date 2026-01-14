@@ -95,7 +95,7 @@ Property {
 }
 
 DataType := BOOL | INT64 | FLOAT64 | DECIMAL | TEXT | BYTES
-          | TIMESTAMP | DATE | POINT | EMBEDDING
+          | DATE | SCHEDULE | POINT | EMBEDDING
 ```
 
 Property names are defined via values in the knowledge layer, not in the protocol.
@@ -110,8 +110,8 @@ Property names are defined via values in the knowledge layer, not in the protoco
 | DECIMAL | 4 | Arbitrary-precision decimal |
 | TEXT | 5 | UTF-8 string |
 | BYTES | 6 | Opaque byte array |
-| TIMESTAMP | 7 | Microseconds since epoch |
-| DATE | 8 | ISO 8601 date string |
+| DATE | 7 | ISO 8601 date string |
+| SCHEDULE | 8 | RFC 5545 schedule or availability |
 | POINT | 9 | WGS84 coordinate |
 | EMBEDDING | 10 | Dense vector |
 
@@ -125,9 +125,9 @@ Property names are defined via values in the knowledge layer, not in the protoco
 | DECIMAL | exponent + mantissa | value = mantissa × 10^exponent |
 | TEXT | UTF-8 string | Length-prefixed |
 | BYTES | Raw bytes | Length-prefixed, opaque |
-| TIMESTAMP | Signed varint | Microseconds since Unix epoch |
 | DATE | UTF-8 string | ISO 8601 (variable precision) |
-| POINT | Two FLOAT64, little-endian | [latitude, longitude] WGS84 |
+| SCHEDULE | UTF-8 string | RFC 5545 iCalendar component |
+| POINT | 2-3 FLOAT64, little-endian | [lon, lat] or [lon, lat, alt] WGS84 |
 | EMBEDDING | sub_type + dims + bytes | Dense vector for similarity search |
 
 #### DECIMAL
@@ -151,7 +151,7 @@ Applications needing to preserve precision (e.g., "12.30" vs "12.3") should stor
 
 #### DATE
 
-Calendar dates with variable precision using the **proleptic Gregorian calendar**. Use DATE for semantic dates where precision matters (historical events, birthdays, publication years). Use TIMESTAMP for exact instants.
+Calendar dates with variable precision using the **proleptic Gregorian calendar**. Use DATE for semantic dates where precision matters (historical events, birthdays, publication years). Use INT64 for exact instants (microseconds since epoch).
 
 ```
 "2024-03-15"         // Day precision
@@ -181,29 +181,49 @@ Week dates (`2024-W01`) and ordinal dates (`2024-001`) are NOT supported.
 
 This follows ISO 8601 extended year format. Note: historical "BCE" numbering has no year zero, so BCE year N = astronomical year -(N-1).
 
-**DATE vs TIMESTAMP:** DATE preserves the original precision and is stored as a string. TIMESTAMP is always microsecond-precision UTC stored as an integer. A birthday is a DATE ("1990-05-20"); a login event is a TIMESTAMP.
+**DATE vs INT64 timestamps:** DATE preserves the original precision and is stored as a string. For exact timestamps, use INT64 with microseconds since epoch. A birthday is a DATE ("1990-05-20"); a login event is an INT64 timestamp.
 
 **Sorting (NORMATIVE):** Indexers MUST parse DATE strings into a numeric representation for sorting. Lexicographical string sorting does NOT work for BCE years. Dates sort by their earliest possible UTC instant on the proleptic Gregorian calendar; when two dates resolve to the same instant, the more precise date sorts first (e.g., `2024-01-01` < `2024-01` < `2024`). Tie-break by byte comparison of the original string if instants and precisions are equal.
 
-**Validation (NORMATIVE):** DATE strings MUST conform to the grammar above. Full datetime with timezone (e.g., "2024-03-15T14:30Z") SHOULD use TIMESTAMP instead. Implementations MUST reject:
+**Validation (NORMATIVE):** DATE strings MUST conform to the grammar above. Full datetime with timezone (e.g., "2024-03-15T14:30Z") SHOULD use INT64 timestamp or SCHEDULE instead. Implementations MUST reject:
 - Month outside 01-12
 - Day outside valid range for the month (considering leap years)
 - Malformed structure (wrong separators, wrong digit counts)
 
+#### SCHEDULE
+
+RFC 5545 iCalendar component for recurring events and availability.
+
+```
+"DTSTART:20240315T090000Z\nRRULE:FREQ=WEEKLY;BYDAY=MO,WE,FR"   // Weekly on Mon/Wed/Fri
+"DTSTART:20240101\nRRULE:FREQ=YEARLY"                           // Annual event
+"FREEBUSY:20240315T090000Z/20240315T170000Z"                    // Availability window
+```
+
+**Grammar (NORMATIVE):** SCHEDULE values contain one or more iCalendar properties as defined in RFC 5545. The value MUST be a valid sequence of iCalendar content lines (properties). Common patterns:
+
+- **Recurring events:** `DTSTART` with optional `RRULE`, `RDATE`, or `EXDATE`
+- **Availability:** `FREEBUSY` periods
+
+**Line folding (NORMATIVE):** Content lines MAY use RFC 5545 line folding (CRLF followed by a space or tab). Implementations MUST unfold before parsing.
+
+**Validation (NORMATIVE):** Implementations MUST validate that the value parses as valid iCalendar properties per RFC 5545. Invalid property names, malformed date-times, or syntax errors MUST be rejected (E005).
+
 #### POINT
 
-WGS84 geographic coordinate.
+WGS84 geographic coordinate with 2 or 3 ordinates.
 
 ```
 POINT {
-  latitude: float64   // -90 to +90
-  longitude: float64  // -180 to +180
+  longitude: float64  // -180 to +180 (required)
+  latitude: float64   // -90 to +90 (required)
+  altitude: float64?  // meters above WGS84 ellipsoid (optional)
 }
 ```
 
-**Coordinate order (NORMATIVE):** `[latitude, longitude]`.
+**Coordinate order (NORMATIVE):** `[longitude, latitude]` or `[longitude, latitude, altitude]`.
 
-**Bounds validation (NORMATIVE):** Latitude MUST be in range [-90, +90]. Longitude MUST be in range [-180, +180]. Values outside these ranges MUST be rejected (E005).
+**Bounds validation (NORMATIVE):** Longitude MUST be in range [-180, +180]. Latitude MUST be in range [-90, +90]. Values outside these ranges MUST be rejected (E005). Altitude has no bounds restrictions.
 
 For complex geometry (polygons, lines), use BYTES with WKB encoding.
 
@@ -948,9 +968,9 @@ Decimal:
   if 0x01: len: varint, mantissa: bytes[len]
 Text: len: varint, data: UTF-8 bytes
 Bytes: len: varint, data: bytes
-Timestamp: signed_varint (microseconds)
 Date: len: varint, data: UTF-8 bytes (ISO 8601)
-Point: latitude: Float64, longitude: Float64
+Schedule: len: varint, data: UTF-8 bytes (RFC 5545)
+Point: ordinate_count: uint8 (2 or 3), longitude: Float64, latitude: Float64, [altitude: Float64]
 Embedding:
   sub_type: uint8 (0x00=f32, 0x01=i8, 0x02=binary)
   dims: varint
@@ -1059,7 +1079,8 @@ Indexers MUST reject edits that fail structural validation:
 | DECIMAL normalization | Mantissa has trailing zeros, or zero not encoded as {0,0} |
 | Signatures | Invalid (if governance requires) |
 | BOOL values | Not 0x00 or 0x01 |
-| POINT bounds | Latitude outside [-90, +90] or longitude outside [-180, +180] |
+| POINT bounds | Longitude outside [-180, +180] or latitude outside [-90, +90] |
+| POINT ordinate count | ordinate_count not 2 or 3 |
 | DATE format | Does not match grammar, invalid month (>12), invalid day for month |
 | Position strings | Empty, characters outside `0-9A-Za-z`, or length > 64 |
 | EMBEDDING dims | Data length doesn't match dims × bytes-per-element for subtype |
