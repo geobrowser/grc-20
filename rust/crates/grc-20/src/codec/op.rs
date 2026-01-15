@@ -7,7 +7,7 @@ use crate::codec::value::{decode_position, decode_property_value, validate_posit
 use crate::error::{DecodeError, EncodeError};
 use crate::limits::MAX_VALUES_PER_ENTITY;
 use crate::model::{
-    CreateEntity, CreateRelation, DataType, DeleteEntity, DeleteRelation,
+    CreateEntity, CreateRelation, CreateValueRef, DataType, DeleteEntity, DeleteRelation,
     DictionaryBuilder, Op, PropertyValue, RestoreEntity, RestoreRelation,
     UnsetLanguage, UnsetValue, UnsetRelationField, UpdateEntity, UpdateRelation, WireDictionaries,
 };
@@ -21,6 +21,7 @@ const OP_CREATE_RELATION: u8 = 5;
 const OP_UPDATE_RELATION: u8 = 6;
 const OP_DELETE_RELATION: u8 = 7;
 const OP_RESTORE_RELATION: u8 = 8;
+const OP_CREATE_VALUE_REF: u8 = 9;
 
 // UpdateEntity flags
 const FLAG_HAS_SET_PROPERTIES: u8 = 0x01;
@@ -34,7 +35,13 @@ const FLAG_HAS_TO_SPACE: u8 = 0x04;
 const FLAG_HAS_TO_VERSION: u8 = 0x08;
 const FLAG_HAS_ENTITY: u8 = 0x10;
 const FLAG_HAS_POSITION: u8 = 0x20;
-const CREATE_RELATION_RESERVED_MASK: u8 = 0xC0;
+const FLAG_FROM_IS_VALUE_REF: u8 = 0x40;
+const FLAG_TO_IS_VALUE_REF: u8 = 0x80;
+
+// CreateValueRef flags
+const FLAG_HAS_LANGUAGE: u8 = 0x01;
+const FLAG_HAS_SPACE: u8 = 0x02;
+const CREATE_VALUE_REF_RESERVED_MASK: u8 = 0xFC;
 
 // UpdateRelation set flags (bit order matches field order in spec Section 6.4)
 const UPDATE_SET_FROM_SPACE: u8 = 0x01;
@@ -69,6 +76,7 @@ pub fn decode_op<'a>(reader: &mut Reader<'a>, dicts: &WireDictionaries) -> Resul
         OP_UPDATE_RELATION => decode_update_relation(reader, dicts),
         OP_DELETE_RELATION => decode_delete_relation(reader, dicts),
         OP_RESTORE_RELATION => decode_restore_relation(reader, dicts),
+        OP_CREATE_VALUE_REF => decode_create_value_ref(reader, dicts),
         _ => Err(DecodeError::InvalidOpType { op_type }),
     }
 }
@@ -228,34 +236,39 @@ fn decode_create_relation<'a>(
     }
     let relation_type = dicts.relation_types[type_index];
 
-    let from_index = reader.read_varint("from")? as usize;
-    if from_index >= dicts.objects.len() {
-        return Err(DecodeError::IndexOutOfBounds {
-            dict: "objects",
-            index: from_index,
-            size: dicts.objects.len(),
-        });
-    }
-    let from = dicts.objects[from_index];
-
-    let to_index = reader.read_varint("to")? as usize;
-    if to_index >= dicts.objects.len() {
-        return Err(DecodeError::IndexOutOfBounds {
-            dict: "objects",
-            index: to_index,
-            size: dicts.objects.len(),
-        });
-    }
-    let to = dicts.objects[to_index];
-
     let flags = reader.read_byte("relation_flags")?;
+    let from_is_value_ref = flags & FLAG_FROM_IS_VALUE_REF != 0;
+    let to_is_value_ref = flags & FLAG_TO_IS_VALUE_REF != 0;
 
-    // Check reserved bits
-    if flags & CREATE_RELATION_RESERVED_MASK != 0 {
-        return Err(DecodeError::ReservedBitsSet {
-            context: "CreateRelation flags",
-        });
-    }
+    // Read from endpoint: inline ID if value ref, otherwise ObjectRef
+    let from = if from_is_value_ref {
+        reader.read_id("from")?
+    } else {
+        let from_index = reader.read_varint("from")? as usize;
+        if from_index >= dicts.objects.len() {
+            return Err(DecodeError::IndexOutOfBounds {
+                dict: "objects",
+                index: from_index,
+                size: dicts.objects.len(),
+            });
+        }
+        dicts.objects[from_index]
+    };
+
+    // Read to endpoint: inline ID if value ref, otherwise ObjectRef
+    let to = if to_is_value_ref {
+        reader.read_id("to")?
+    } else {
+        let to_index = reader.read_varint("to")? as usize;
+        if to_index >= dicts.objects.len() {
+            return Err(DecodeError::IndexOutOfBounds {
+                dict: "objects",
+                index: to_index,
+                size: dicts.objects.len(),
+            });
+        }
+        dicts.objects[to_index]
+    };
 
     // Read optional fields in spec order: from_space, from_version, to_space, to_version, entity, position
     let from_space = if flags & FLAG_HAS_FROM_SPACE != 0 {
@@ -298,7 +311,9 @@ fn decode_create_relation<'a>(
         id,
         relation_type,
         from,
+        from_is_value_ref,
         to,
+        to_is_value_ref,
         entity,
         position,
         from_space,
@@ -429,6 +444,83 @@ fn decode_restore_relation<'a>(
     Ok(Op::RestoreRelation(RestoreRelation { id }))
 }
 
+fn decode_create_value_ref<'a>(
+    reader: &mut Reader<'a>,
+    dicts: &WireDictionaries,
+) -> Result<Op<'a>, DecodeError> {
+    let id = reader.read_id("value_ref_id")?;
+
+    let entity_index = reader.read_varint("entity")? as usize;
+    if entity_index >= dicts.objects.len() {
+        return Err(DecodeError::IndexOutOfBounds {
+            dict: "objects",
+            index: entity_index,
+            size: dicts.objects.len(),
+        });
+    }
+    let entity = dicts.objects[entity_index];
+
+    let property_index = reader.read_varint("property")? as usize;
+    if property_index >= dicts.properties.len() {
+        return Err(DecodeError::IndexOutOfBounds {
+            dict: "properties",
+            index: property_index,
+            size: dicts.properties.len(),
+        });
+    }
+    let property = dicts.properties[property_index].0;
+    let data_type = dicts.properties[property_index].1;
+
+    let flags = reader.read_byte("value_ref_flags")?;
+
+    // Check reserved bits
+    if flags & CREATE_VALUE_REF_RESERVED_MASK != 0 {
+        return Err(DecodeError::ReservedBitsSet {
+            context: "CreateValueRef flags",
+        });
+    }
+
+    let language = if flags & FLAG_HAS_LANGUAGE != 0 {
+        // Validate: language is only allowed for TEXT properties
+        if data_type != DataType::Text {
+            return Err(DecodeError::MalformedEncoding {
+                context: "CreateValueRef has_language=1 but property DataType is not TEXT",
+            });
+        }
+        let lang_index = reader.read_varint("language")? as usize;
+        // Language index 0 = non-linguistic (no language), 1+ = language_ids[index-1]
+        if lang_index == 0 {
+            None // Non-linguistic
+        } else {
+            let idx = lang_index - 1;
+            if idx >= dicts.languages.len() {
+                return Err(DecodeError::IndexOutOfBounds {
+                    dict: "languages",
+                    index: lang_index,
+                    size: dicts.languages.len() + 1,
+                });
+            }
+            Some(dicts.languages[idx])
+        }
+    } else {
+        None
+    };
+
+    let space = if flags & FLAG_HAS_SPACE != 0 {
+        Some(reader.read_id("space")?)
+    } else {
+        None
+    };
+
+    Ok(Op::CreateValueRef(CreateValueRef {
+        id,
+        entity,
+        property,
+        language,
+        space,
+    }))
+}
+
 // =============================================================================
 // ENCODING
 // =============================================================================
@@ -452,6 +544,7 @@ pub fn encode_op(
         Op::UpdateRelation(ur) => encode_update_relation(writer, ur, dict_builder),
         Op::DeleteRelation(dr) => encode_delete_relation(writer, dr, dict_builder),
         Op::RestoreRelation(rr) => encode_restore_relation(writer, rr, dict_builder),
+        Op::CreateValueRef(cvr) => encode_create_value_ref(writer, cvr, dict_builder),
     }
 }
 
@@ -560,12 +653,6 @@ fn encode_create_relation(
     let type_index = dict_builder.add_relation_type(cr.relation_type);
     writer.write_varint(type_index as u64);
 
-    let from_index = dict_builder.add_object(cr.from);
-    writer.write_varint(from_index as u64);
-
-    let to_index = dict_builder.add_object(cr.to);
-    writer.write_varint(to_index as u64);
-
     // Build flags (bit order matches field order in spec Section 6.4)
     let mut flags = 0u8;
     if cr.from_space.is_some() {
@@ -586,7 +673,29 @@ fn encode_create_relation(
     if cr.position.is_some() {
         flags |= FLAG_HAS_POSITION;
     }
+    if cr.from_is_value_ref {
+        flags |= FLAG_FROM_IS_VALUE_REF;
+    }
+    if cr.to_is_value_ref {
+        flags |= FLAG_TO_IS_VALUE_REF;
+    }
     writer.write_byte(flags);
+
+    // Write from endpoint: inline ID if value ref, otherwise ObjectRef
+    if cr.from_is_value_ref {
+        writer.write_id(&cr.from);
+    } else {
+        let from_index = dict_builder.add_object(cr.from);
+        writer.write_varint(from_index as u64);
+    }
+
+    // Write to endpoint: inline ID if value ref, otherwise ObjectRef
+    if cr.to_is_value_ref {
+        writer.write_id(&cr.to);
+    } else {
+        let to_index = dict_builder.add_object(cr.to);
+        writer.write_varint(to_index as u64);
+    }
 
     // Write optional fields in spec order: from_space, from_version, to_space, to_version, entity, position
     if let Some(space) = &cr.from_space {
@@ -702,6 +811,45 @@ fn encode_restore_relation(
     Ok(())
 }
 
+fn encode_create_value_ref(
+    writer: &mut Writer,
+    cvr: &CreateValueRef,
+    dict_builder: &mut DictionaryBuilder,
+) -> Result<(), EncodeError> {
+    writer.write_byte(OP_CREATE_VALUE_REF);
+    writer.write_id(&cvr.id);
+
+    let entity_index = dict_builder.add_object(cvr.entity);
+    writer.write_varint(entity_index as u64);
+
+    // For CreateValueRef, we need to add the property to the dictionary.
+    // Use DataType::Text as a placeholder if language is present, otherwise Bool.
+    // The actual data type will be determined by the property's declaration elsewhere.
+    let data_type = if cvr.language.is_some() { DataType::Text } else { DataType::Bool };
+    let property_index = dict_builder.add_property(cvr.property, data_type);
+    writer.write_varint(property_index as u64);
+
+    let mut flags = 0u8;
+    if cvr.language.is_some() {
+        flags |= FLAG_HAS_LANGUAGE;
+    }
+    if cvr.space.is_some() {
+        flags |= FLAG_HAS_SPACE;
+    }
+    writer.write_byte(flags);
+
+    if let Some(lang_id) = cvr.language {
+        let lang_index = dict_builder.add_language(Some(lang_id));
+        writer.write_varint(lang_index as u64);
+    }
+
+    if let Some(space) = &cvr.space {
+        writer.write_id(space);
+    }
+
+    Ok(())
+}
+
 fn encode_property_value(
     writer: &mut Writer,
     pv: &PropertyValue<'_>,
@@ -772,7 +920,9 @@ mod tests {
             id: [10u8; 16],
             relation_type: [1u8; 16],
             from: [2u8; 16],
+            from_is_value_ref: false,
             to: [3u8; 16],
+            to_is_value_ref: false,
             entity: Some([4u8; 16]),
             position: Some(Cow::Owned("abc".to_string())),
             from_space: None,
@@ -797,7 +947,9 @@ mod tests {
                 assert_eq!(r1.id, r2.id);
                 assert_eq!(r1.relation_type, r2.relation_type);
                 assert_eq!(r1.from, r2.from);
+                assert_eq!(r1.from_is_value_ref, r2.from_is_value_ref);
                 assert_eq!(r1.to, r2.to);
+                assert_eq!(r1.to_is_value_ref, r2.to_is_value_ref);
                 assert_eq!(r1.entity, r2.entity);
                 match (&r1.position, &r2.position) {
                     (Some(p1), Some(p2)) => assert_eq!(p1.as_ref(), p2.as_ref()),
@@ -816,7 +968,9 @@ mod tests {
             id: [10u8; 16],
             relation_type: [1u8; 16],
             from: [2u8; 16],
+            from_is_value_ref: false,
             to: [3u8; 16],
+            to_is_value_ref: false,
             entity: None,
             position: Some(Cow::Owned("abc".to_string())),
             from_space: None,
@@ -840,7 +994,9 @@ mod tests {
                 assert_eq!(r1.id, r2.id);
                 assert_eq!(r1.relation_type, r2.relation_type);
                 assert_eq!(r1.from, r2.from);
+                assert_eq!(r1.from_is_value_ref, r2.from_is_value_ref);
                 assert_eq!(r1.to, r2.to);
+                assert_eq!(r1.to_is_value_ref, r2.to_is_value_ref);
                 assert_eq!(r1.entity, r2.entity);
                 assert!(r1.entity.is_none());
                 assert!(r2.entity.is_none());
@@ -855,7 +1011,9 @@ mod tests {
             id: [10u8; 16],
             relation_type: [1u8; 16],
             from: [2u8; 16],
+            from_is_value_ref: false,
             to: [3u8; 16],
+            to_is_value_ref: false,
             entity: Some([4u8; 16]),
             position: Some(Cow::Owned("abc".to_string())),
             from_space: Some([5u8; 16]),
@@ -879,7 +1037,9 @@ mod tests {
                 assert_eq!(r1.id, r2.id);
                 assert_eq!(r1.relation_type, r2.relation_type);
                 assert_eq!(r1.from, r2.from);
+                assert_eq!(r1.from_is_value_ref, r2.from_is_value_ref);
                 assert_eq!(r1.to, r2.to);
+                assert_eq!(r1.to_is_value_ref, r2.to_is_value_ref);
                 assert_eq!(r1.entity, r2.entity);
                 assert_eq!(r1.from_space, r2.from_space);
                 assert_eq!(r1.from_version, r2.from_version);
@@ -887,6 +1047,112 @@ mod tests {
                 assert_eq!(r1.to_version, r2.to_version);
             }
             _ => panic!("expected CreateRelation"),
+        }
+    }
+
+    #[test]
+    fn test_create_relation_with_value_ref_endpoint() {
+        // Test with to endpoint being a value ref (inline ID)
+        let op = Op::CreateRelation(CreateRelation {
+            id: [10u8; 16],
+            relation_type: [1u8; 16],
+            from: [2u8; 16],
+            from_is_value_ref: false,
+            to: [99u8; 16], // Value ref ID
+            to_is_value_ref: true,
+            entity: None,
+            position: None,
+            from_space: None,
+            from_version: None,
+            to_space: None,
+            to_version: None,
+        });
+
+        let mut dict_builder = DictionaryBuilder::new();
+        let property_types = rustc_hash::FxHashMap::default();
+
+        let mut writer = Writer::new();
+        encode_op(&mut writer, &op, &mut dict_builder, &property_types).unwrap();
+
+        let dicts = dict_builder.build();
+        let mut reader = Reader::new(writer.as_bytes());
+        let decoded = decode_op(&mut reader, &dicts).unwrap();
+
+        match (&op, &decoded) {
+            (Op::CreateRelation(r1), Op::CreateRelation(r2)) => {
+                assert_eq!(r1.id, r2.id);
+                assert_eq!(r1.from, r2.from);
+                assert_eq!(r1.from_is_value_ref, r2.from_is_value_ref);
+                assert!(!r1.from_is_value_ref);
+                assert_eq!(r1.to, r2.to);
+                assert_eq!(r1.to_is_value_ref, r2.to_is_value_ref);
+                assert!(r1.to_is_value_ref);
+            }
+            _ => panic!("expected CreateRelation"),
+        }
+    }
+
+    #[test]
+    fn test_create_value_ref_roundtrip() {
+        let op = Op::CreateValueRef(CreateValueRef {
+            id: [1u8; 16],
+            entity: [2u8; 16],
+            property: [3u8; 16],
+            language: None,
+            space: None,
+        });
+
+        let mut dict_builder = DictionaryBuilder::new();
+        let property_types = rustc_hash::FxHashMap::default();
+
+        let mut writer = Writer::new();
+        encode_op(&mut writer, &op, &mut dict_builder, &property_types).unwrap();
+
+        let dicts = dict_builder.build();
+        let mut reader = Reader::new(writer.as_bytes());
+        let decoded = decode_op(&mut reader, &dicts).unwrap();
+
+        match (&op, &decoded) {
+            (Op::CreateValueRef(v1), Op::CreateValueRef(v2)) => {
+                assert_eq!(v1.id, v2.id);
+                assert_eq!(v1.entity, v2.entity);
+                assert_eq!(v1.property, v2.property);
+                assert_eq!(v1.language, v2.language);
+                assert_eq!(v1.space, v2.space);
+            }
+            _ => panic!("expected CreateValueRef"),
+        }
+    }
+
+    #[test]
+    fn test_create_value_ref_with_language_and_space() {
+        let op = Op::CreateValueRef(CreateValueRef {
+            id: [1u8; 16],
+            entity: [2u8; 16],
+            property: [3u8; 16],
+            language: Some([4u8; 16]),
+            space: Some([5u8; 16]),
+        });
+
+        let mut dict_builder = DictionaryBuilder::new();
+        let property_types = rustc_hash::FxHashMap::default();
+
+        let mut writer = Writer::new();
+        encode_op(&mut writer, &op, &mut dict_builder, &property_types).unwrap();
+
+        let dicts = dict_builder.build();
+        let mut reader = Reader::new(writer.as_bytes());
+        let decoded = decode_op(&mut reader, &dicts).unwrap();
+
+        match (&op, &decoded) {
+            (Op::CreateValueRef(v1), Op::CreateValueRef(v2)) => {
+                assert_eq!(v1.id, v2.id);
+                assert_eq!(v1.entity, v2.entity);
+                assert_eq!(v1.property, v2.property);
+                assert_eq!(v1.language, v2.language);
+                assert_eq!(v1.space, v2.space);
+            }
+            _ => panic!("expected CreateValueRef"),
         }
     }
 

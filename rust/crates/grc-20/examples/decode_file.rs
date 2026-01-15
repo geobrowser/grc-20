@@ -77,6 +77,7 @@ fn main() {
     let mut restore_entity_count = 0;
     let mut restore_relation_count = 0;
 
+    let mut create_value_ref_count = 0;
     for op in &edit.ops {
         match op {
             Op::CreateEntity(_) => create_entity_count += 1,
@@ -87,6 +88,7 @@ fn main() {
             Op::UpdateRelation(_) => update_relation_count += 1,
             Op::DeleteRelation(_) => delete_relation_count += 1,
             Op::RestoreRelation(_) => restore_relation_count += 1,
+            Op::CreateValueRef(_) => create_value_ref_count += 1,
         }
     }
     println!("  CreateEntity: {}", create_entity_count);
@@ -97,6 +99,7 @@ fn main() {
     println!("  UpdateRelation: {}", update_relation_count);
     println!("  DeleteRelation: {}", delete_relation_count);
     println!("  RestoreRelation: {}", restore_relation_count);
+    println!("  CreateValueRef: {}", create_value_ref_count);
 
     // Show first few operations in detail
     println!("\n=== First 20 Operations (detail) ===");

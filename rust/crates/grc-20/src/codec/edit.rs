@@ -273,7 +273,9 @@ fn op_to_owned(op: Op<'_>) -> Op<'static> {
             id: cr.id,
             relation_type: cr.relation_type,
             from: cr.from,
+            from_is_value_ref: cr.from_is_value_ref,
             to: cr.to,
+            to_is_value_ref: cr.to_is_value_ref,
             entity: cr.entity,
             position: cr.position.map(|p| Cow::Owned(p.into_owned())),
             from_space: cr.from_space,
@@ -292,6 +294,7 @@ fn op_to_owned(op: Op<'_>) -> Op<'static> {
         }),
         Op::DeleteRelation(dr) => Op::DeleteRelation(dr),
         Op::RestoreRelation(rr) => Op::RestoreRelation(rr),
+        Op::CreateValueRef(cvr) => Op::CreateValueRef(cvr),
     }
 }
 

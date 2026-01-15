@@ -283,6 +283,20 @@ fn decode_datetime<'a>(reader: &mut Reader<'a>) -> Result<Value<'a>, DecodeError
             context: "DATETIME must contain 'T' separator",
         });
     }
+    // DATETIME must include timezone (Z or offset)
+    // For datetime strings, timezone appears after 'T', so check for:
+    // - 'Z' anywhere (UTC)
+    // - '+' anywhere (positive offset like +05:30)
+    // - '-' after the 'T' position (negative offset like -05:00)
+    let t_pos = value.find('T').unwrap(); // Safe: we just checked for 'T'
+    let has_timezone = value.contains('Z')
+        || value.contains('+')
+        || value[t_pos..].contains('-');
+    if !has_timezone {
+        return Err(DecodeError::MalformedEncoding {
+            context: "DATETIME must include timezone (Z or offset)",
+        });
+    }
     Ok(Value::Datetime(Cow::Borrowed(value)))
 }
 
@@ -463,6 +477,16 @@ pub fn encode_value(
             if !value.contains('T') {
                 return Err(EncodeError::InvalidInput {
                     context: "DATETIME must contain 'T' separator",
+                });
+            }
+            // DATETIME must include timezone (Z or offset)
+            let t_pos = value.find('T').unwrap(); // Safe: we just checked for 'T'
+            let has_timezone = value.contains('Z')
+                || value.contains('+')
+                || value[t_pos..].contains('-');
+            if !has_timezone {
+                return Err(EncodeError::InvalidInput {
+                    context: "DATETIME must include timezone (Z or offset)",
                 });
             }
             writer.write_string(value);
@@ -880,12 +904,12 @@ mod tests {
         let dicts = WireDictionaries::default();
         let mut dict_builder = DictionaryBuilder::new();
 
-        // Test various datetime formats
+        // Test various datetime formats (all with timezone)
         let test_cases = [
-            "2024-03-15T14:30:00",
             "2024-03-15T14:30:00Z",
             "2024-03-15T14:30:00.000Z",
             "2024-03-15T14:30:00+05:30",
+            "2024-03-15T14:30:00-05:00",
             "2025-11-18T05:00:00.000Z",
         ];
 
@@ -935,6 +959,11 @@ mod tests {
         let invalid = Value::Datetime(Cow::Borrowed("2024-03-15"));
         let mut writer = Writer::new();
         assert!(encode_value(&mut writer, &invalid, &mut dict_builder).is_err());
+
+        // DATETIME should reject strings without timezone
+        let invalid_no_tz = Value::Datetime(Cow::Borrowed("2024-03-15T14:30:00"));
+        let mut writer = Writer::new();
+        assert!(encode_value(&mut writer, &invalid_no_tz, &mut dict_builder).is_err());
     }
 
     #[test]

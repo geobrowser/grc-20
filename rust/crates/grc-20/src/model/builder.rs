@@ -153,7 +153,9 @@ impl<'a> EditBuilder<'a> {
             id,
             relation_type,
             from,
+            from_is_value_ref: false,
             to,
+            to_is_value_ref: false,
             entity: None,
             position: None,
             from_space: None,
@@ -604,7 +606,9 @@ pub struct RelationBuilder<'a> {
     id: Option<Id>,
     relation_type: Option<Id>,
     from: Option<Id>,
+    from_is_value_ref: bool,
     to: Option<Id>,
+    to_is_value_ref: bool,
     entity: Option<Id>,
     position: Option<Cow<'a, str>>,
     from_space: Option<Id>,
@@ -685,7 +689,9 @@ impl<'a> RelationBuilder<'a> {
             id: self.id?,
             relation_type: self.relation_type?,
             from: self.from?,
+            from_is_value_ref: self.from_is_value_ref,
             to: self.to?,
+            to_is_value_ref: self.to_is_value_ref,
             entity: self.entity,
             position: self.position,
             from_space: self.from_space,
@@ -693,6 +699,20 @@ impl<'a> RelationBuilder<'a> {
             to_space: self.to_space,
             to_version: self.to_version,
         })
+    }
+
+    /// Sets `from` as a value ref ID (inline encoding).
+    pub fn from_value_ref(mut self, id: Id) -> Self {
+        self.from = Some(id);
+        self.from_is_value_ref = true;
+        self
+    }
+
+    /// Sets `to` as a value ref ID (inline encoding).
+    pub fn to_value_ref(mut self, id: Id) -> Self {
+        self.to = Some(id);
+        self.to_is_value_ref = true;
+        self
     }
 }
 

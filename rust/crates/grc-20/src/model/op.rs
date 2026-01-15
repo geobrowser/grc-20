@@ -17,6 +17,7 @@ pub enum Op<'a> {
     UpdateRelation(UpdateRelation<'a>),
     DeleteRelation(DeleteRelation),
     RestoreRelation(RestoreRelation),
+    CreateValueRef(CreateValueRef),
 }
 
 impl Op<'_> {
@@ -31,6 +32,7 @@ impl Op<'_> {
             Op::UpdateRelation(_) => 6,
             Op::DeleteRelation(_) => 7,
             Op::RestoreRelation(_) => 8,
+            Op::CreateValueRef(_) => 9,
         }
     }
 }
@@ -154,14 +156,20 @@ pub struct CreateRelation<'a> {
     pub id: Id,
     /// The relation type entity ID.
     pub relation_type: Id,
-    /// Source entity ID.
+    /// Source entity or value ref ID.
     pub from: Id,
+    /// If true, `from` is a value ref ID (inline encoding).
+    /// If false, `from` is an entity ID (ObjectRef encoding).
+    pub from_is_value_ref: bool,
     /// Optional space pin for source entity.
     pub from_space: Option<Id>,
     /// Optional version (edit ID) to pin source entity.
     pub from_version: Option<Id>,
-    /// Target entity ID.
+    /// Target entity or value ref ID.
     pub to: Id,
+    /// If true, `to` is a value ref ID (inline encoding).
+    /// If false, `to` is an entity ID (ObjectRef encoding).
+    pub to_is_value_ref: bool,
     /// Optional space pin for target entity.
     pub to_space: Option<Id>,
     /// Optional version (edit ID) to pin target entity.
@@ -269,6 +277,24 @@ pub struct RestoreRelation {
     pub id: Id,
 }
 
+/// Creates a referenceable ID for a value slot (spec Section 3.4).
+///
+/// This enables relations to target specific values for provenance,
+/// confidence, attribution, or other qualifiers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CreateValueRef {
+    /// The value ref's unique identifier.
+    pub id: Id,
+    /// The entity holding the value.
+    pub entity: Id,
+    /// The property of the value.
+    pub property: Id,
+    /// The language (TEXT values only).
+    pub language: Option<Id>,
+    /// The space containing the value (default: current space).
+    pub space: Option<Id>,
+}
+
 /// Validates a position string according to spec rules.
 ///
 /// Position strings must:
@@ -358,7 +384,9 @@ mod tests {
             id: rel_id,
             relation_type: rel_type,
             from,
+            from_is_value_ref: false,
             to,
+            to_is_value_ref: false,
             entity: None,
             position: None,
             from_space: None,
@@ -375,7 +403,9 @@ mod tests {
             id: rel_id,
             relation_type: rel_type,
             from,
+            from_is_value_ref: false,
             to,
+            to_is_value_ref: false,
             entity: Some(explicit_entity),
             position: None,
             from_space: None,
