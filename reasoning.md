@@ -491,3 +491,216 @@ What it *doesn’t* provide by design (and therefore what a reasoning engine wil
 * **standardized conventions around statement identity, units, and time.**
 
 If you tell me what kind of reasoning you actually want to support first (e.g., OWL RL entailment? SHACL validation? Datalog rules? provenance-based trust inference? temporal rules?), I can propose a concrete “Reasoning Profile” vocabulary (relation types + constraints) that fits v2 and avoids the worst ambiguity traps.
+
+
+
+
+
+Yes — even if “meaning” lives entirely in the knowledge layer, there are a few **serialization-layer tweaks** that pay huge dividends later. The theme is: *make the substrate preserve optional structure you can’t recover later*, without turning the format into a schema system.
+
+Here are the changes I’d seriously consider, ordered by leverage.
+
+---
+
+## 1) Add an explicit, stable “statement identity” primitive
+
+Right now, statement identity is split across:
+
+* property values (unique per `(entity, property, language)`, LWW)
+* relations (unique per `relation.id`, immutable endpoints)
+* reified entities (sometimes derived, sometimes shared)
+
+For reasoning/provenance tooling, it’s incredibly useful to have a uniform “this is a claim” handle.
+
+**Serialization-layer addition (minimal):**
+
+* Add an optional field on `Value`:
+
+  * `value_id: ID?` (or `statement_id: ID?`)
+
+If present, it identifies that value assertion as a first-class statement node (even if you still store it in the value slot). This lets you attach provenance/qualifiers to *values* the same way you can for relations.
+
+Why it matters:
+
+* Today, to qualify a value (“source”, “confidence”, “as-of”, “who said it”), you must model it indirectly (often with extra relation entities).
+* If you ever want “statement-level provenance” consistently, you’ll wish values had claim IDs.
+
+This doesn’t enforce semantics; it just preserves an identity hook.
+
+---
+
+## 2) Make “multi-assertion” possible without forcing it
+
+Your value uniqueness + LWW is great for UX, but it’s lossy for pluralistic knowledge inside a space.
+
+If governance wants “keep competing assertions” (even temporarily), you currently must encode them as relations, which is awkward for simple data properties.
+
+**Serialization-layer capability (optional):**
+
+* Support **multi-value slots** for values in the protocol, *without requiring clients to use them*.
+
+Two ways:
+
+### Option A (safest): add a new op for multi-values
+
+* `UpdateEntityMulti` where `add: List<Value>`, `remove: List<ValueKey>` (or remove by `value_id`)
+* Values in multi-mode are not unique by `(entity, property, language)`.
+
+### Option B (lighter): add a “cardinality” bit in the property dictionary entry
+
+In `properties: (ID, DataType)[]`, add optional flags:
+
+* `flags: uint8` with a bit like `MULTI_VALUED`
+
+Then:
+
+* if not set: keep current uniqueness/LWW semantics
+* if set: allow multiple values (then you need a deterministic tie-break / ordering rule)
+
+Why it matters:
+
+* You can’t “upgrade” a deployed ecosystem easily if you realize later that “single-value slots” are too restrictive for knowledge curation.
+* Making this optional lets governance decide per-property.
+
+(You can still recommend “use relations for multi,” but having the capability prevents regret.)
+
+---
+
+## 3) Strengthen cross-edit datatype consistency *mechanically* (without enforcing it)
+
+Per-edit typing is flexible, but it makes downstream tooling harder.
+
+Even if governance enforces consistency, it’s valuable for the substrate to expose “what you think the type is” in a stable way.
+
+**Serialization-layer addition:**
+
+* In the `properties` dictionary, add an optional **expected_type_ref** (to your Genesis datatype entity IDs), separate from the edit-local wire type.
+
+For example:
+
+* `properties: (property_id, wire_datatype, expected_datatype_entity_id?)`
+
+Governance can require:
+
+* `wire_datatype == expected_datatype` for all edits in that space.
+
+Why it matters:
+
+* Lets indexers validate cheaply without loading the knowledge-layer schema.
+* Makes it easier to build generic ingestion/ETL and reject nonsense early.
+
+This is still not “schema enforcement” — it’s a hint that governance can choose to require.
+
+---
+
+## 4) Add explicit “fact ordering” hooks for reasoning/replay
+
+You already have total order via `OpPosition`, but if you want reasoners to produce stable proofs and reproducible materializations, it helps to define a canonical ordering for facts beyond “whatever the engine emits.”
+
+**Serialization-layer addition (tiny):**
+
+* Make `Edit.id` optionally **content-addressed** (or explicitly allow `edit_id = CID-derived-UUIDv8`).
+* Add `edit_cid: BYTES?` or `edit_hash: BYTES?` in the header.
+
+You already say CIDs/signatures are over uncompressed canonical bytes. Putting the hash in-band makes:
+
+* audit/proof artifacts easier,
+* cross-system caching easier,
+* “reasoning over exact KB version” easier.
+
+---
+
+## 5) Clarify / tighten DATETIME timezone-less semantics (this *will* bite you)
+
+Right now:
+
+* DATETIME timezone optional; “local time (context-dependent)”
+* sorting treats timezone-less as UTC “for sorting purposes”
+
+That mismatch becomes a nightmare if governance or reasoners rely on comparisons.
+
+**Serialization-layer fix: choose one:**
+
+1. **Require timezone always** for DATETIME (like TIME), OR
+2. Introduce two datatypes:
+
+   * `DATETIME` (timezone required)
+   * `LOCAL_DATETIME` (timezone absent by definition)
+
+This is one of those “do it now or regret it later” substrate decisions.
+
+---
+
+## 6) Unify “pins” into a single, typed reference (optional but clean)
+
+You currently have four optional fields on relations:
+
+* `from_space`, `from_version`, `to_space`, `to_version`
+
+As you add more contextualization later (e.g., “as-of timestamp”, “resolver policy id”, “confidence context”), the relation header will bloat.
+
+**Serialization-layer generalization (future-proofing):**
+
+* Replace with a small “endpoint ref” struct:
+
+  * `EndpointRef { id, space?, version? }`
+* Or a generic “context” bag with well-known keys (careful: keep canonical encoding strict).
+
+This doesn’t change meaning, but makes evolution smoother.
+
+---
+
+## 7) Consider making “relation endpoint must be entity” optionally enforceable
+
+You currently hard-require endpoints are entities (good). Keep it.
+But reasoning engines sometimes want “edge-to-edge” without always going through reified entity.
+
+**Non-breaking extension:**
+
+* Keep current rule.
+* Add a *new* relation type convention at knowledge-layer for “edge-to-edge,” which targets reified entities.
+* No protocol change needed.
+
+I mention it only because this is one place you’re already doing the right thing at the serialization layer.
+
+---
+
+## 8) Add a lightweight “integrity hint” mechanism for governance
+
+You say write-time validation is structural only. That’s good.
+
+Still, it can be useful to carry a **governance-validated stamp** without baking semantics into the protocol.
+
+**Serialization-layer addition (optional):**
+
+* `Edit.attestations: List<Attestation>` where each attestation is:
+
+  * `attestor_id: ID`
+  * `scheme: uint8`
+  * `sig: BYTES`
+  * maybe `policy_id: ID` (which rules were enforced)
+
+This lets a consumer quickly filter:
+
+* “only consider edits attested by policy X”
+  without having to re-run governance logic locally.
+
+(Still decentralized; still optional.)
+
+---
+
+# The two changes I’d prioritize
+
+If you only do two serialization-layer changes now:
+
+1. **Timezone-less DATETIME split or forbid**
+   This prevents years of subtle bugs.
+
+2. **Statement identity for Values (`value_id`)**
+   This unlocks uniform provenance/qualifiers/reasoning over claims without forcing awkward modeling patterns.
+
+Everything else is “nice to have,” but those two are the ones that are hardest to retrofit.
+
+---
+
+If you want, I can draft exact field-level changes (wire format + flags + canonical encoding rules) for the top 2–3 items so they fit your existing “dictionary indices + presence flags” style cleanly.

@@ -103,7 +103,7 @@ DataType := BOOL | INT64 | FLOAT64 | DECIMAL | TEXT | BYTES
 | BYTES | 6 | Opaque byte array |
 | DATE | 7 | ISO 8601 date (year, year-month, or year-month-day) |
 | TIME | 8 | ISO 8601 time with timezone |
-| DATETIME | 9 | ISO 8601 datetime |
+| DATETIME | 9 | ISO 8601 datetime with timezone |
 | SCHEDULE | 10 | RFC 5545 schedule or availability |
 | POINT | 11 | WGS84 coordinate |
 | EMBEDDING | 12 | Dense vector |
@@ -216,10 +216,9 @@ offset      = ("+" / "-") 2DIGIT ":" 2DIGIT
 
 #### DATETIME
 
-ISO 8601 combined date and time. Timezone is optional; values without timezone are interpreted as local time (context-dependent).
+ISO 8601 combined date and time with timezone. DATETIME values always include a timezone to ensure unambiguous interpretation.
 
 ```
-"2024-03-15T14:30:00"            // Local time (no timezone)
 "2024-03-15T14:30:00Z"           // UTC
 "2024-03-15T14:30:00.000Z"       // With milliseconds
 "2024-03-15T14:30:00+05:30"      // With timezone offset
@@ -230,7 +229,7 @@ ISO 8601 combined date and time. Timezone is optional; values without timezone a
 
 **Grammar (NORMATIVE):**
 ```abnf
-datetime    = year-month-day "T" time [timezone]
+datetime    = year-month-day "T" time timezone
 year-month-day = year "-" 2DIGIT "-" 2DIGIT
 year        = [sign] 4DIGIT
 time        = 2DIGIT ":" 2DIGIT ":" 2DIGIT [fraction]
@@ -245,9 +244,10 @@ sign        = "+" / "-"
 - Month outside 1-12
 - Day outside valid range for the month (considering leap years)
 - Hours > 23, minutes > 59, seconds > 60
+- Missing timezone
 - Malformed structure (wrong separators, non-numeric components)
 
-**Sorting (NORMATIVE):** DATETIME values sort by their UTC instant. Values without timezone are treated as UTC for sorting purposes. When two values represent the same instant, the value with more precision sorts first. Tie-break by byte comparison.
+**Sorting (NORMATIVE):** DATETIME values sort by their UTC-normalized instant. When two values represent the same instant, the value with more precision sorts first. Tie-break by byte comparison.
 
 #### SCHEDULE
 
@@ -321,6 +321,54 @@ Value {
 
 The value encoding is determined by the data type declared for the property in the edit's properties dictionary (Section 4.3).
 
+**Value refs:** Value slots can be assigned an ID to enable relations to reference them for provenance, confidence, attribution, or other qualifiers. Value refs are created via the CreateValueRef operation (Section 3.4). Once created, a value ref identifies the *slot*, not a specific historical value—it remains stable as the value changes over time.
+
+**Referencing values:** To make statements about a value, first create a value ref, then create relations targeting it:
+
+```
+// Register Alice's birthdate as a referenceable value
+CreateValueRef {
+  id: <value_ref_id>
+  entity: Alice
+  property: birthDate
+}
+
+// "The source for Alice's birthdate is her passport"
+CreateRelation {
+  type: <hasSource>
+  from: <passport_entity>
+  to: <value_ref_id>
+}
+```
+
+These operations can be in the same edit. Once registered, the value ref can be referenced by any number of relations.
+
+**Referencing historical values:** To reference a value as it existed at a specific point in time, combine the value ref with a version pin on the relation:
+
+```
+// "The source for Alice's age AS OF edit X was this document"
+CreateRelation {
+  type: <hasSource>
+  from: <source_document>
+  to: <alice_age_value_ref>
+  to_version: <edit_X>
+}
+```
+
+Without a version pin, the relation refers to the current value. With a version pin, it refers to the historical value at that edit.
+
+**Cross-space value refs:** To reference a value in a different space, include the `space` field in CreateValueRef:
+
+```
+// Register a reference to Alice's birthdate in Space X
+CreateValueRef {
+  id: <value_ref_id>
+  entity: Alice
+  property: birthDate
+  space: SpaceX
+}
+```
+
 **Value uniqueness:**
 
 Values are unique per (entityId, propertyId), with TEXT values additionally differentiated by language. Setting a value replaces any existing value for that (property, language) combination. For ordered or multiple values, use relations with positions.
@@ -339,10 +387,10 @@ Relations are directed edges with an associated entity for reification.
 Relation {
   id: ID
   type: ID
-  from: ID             // Source entity
+  from: ID             // Source entity or value ref
   from_space: ID?      // Optional space pin for source
   from_version: ID?    // Optional version pin for source
-  to: ID               // Target entity
+  to: ID               // Target entity or value ref
   to_space: ID?        // Optional space pin for target
   to_version: ID?      // Optional version pin for target
   entity: ID           // Reified entity representing this relation
@@ -350,7 +398,7 @@ Relation {
 }
 ```
 
-**Endpoint constraint (NORMATIVE):** The `from` and `to` fields MUST reference entities, not relations. To create a meta-edge (a relation that references another relation), target the other relation's reified entity via its `entity` ID.
+**Endpoint constraint (NORMATIVE):** The `from` and `to` fields MUST reference entities or value refs, not relations. To create a meta-edge (a relation that references another relation), target the other relation's reified entity via its `entity` ID.
 
 The `entity` field links to an entity that represents this relation as a node. This enables relations to be referenced by other relations (meta-edges) and to participate in the graph as first-class nodes. Values are stored on the reified entity, not on the relation itself.
 
@@ -440,6 +488,7 @@ Op {
     UpdateRelation   = 6
     DeleteRelation   = 7
     RestoreRelation  = 8
+    CreateValueRef   = 9
   }
 }
 ```
@@ -601,7 +650,32 @@ Transitions a DELETED relation back to ACTIVE state.
 
 **Reified entity lifecycle (NORMATIVE):** Deleting a relation does NOT delete its reified entity. The entity remains accessible and may hold values, be referenced by other relations, or be explicitly deleted via DeleteEntity. Orphaned reified entities are permitted; applications MAY garbage-collect them at a higher layer.
 
-### 3.4 State Resolution
+### 3.4 Value Ref Operations
+
+**CreateValueRef:**
+```
+CreateValueRef {
+  id: ID
+  entity: ID           // Entity holding the value
+  property: ID         // Property of the value
+  language: ID?        // Language (TEXT values only)
+  space: ID?           // Space containing the value (default: current space)
+}
+```
+
+Creates a referenceable ID for a value slot, enabling relations to target that value.
+
+**Semantics (NORMATIVE):** A value slot is identified by (entity, property, language, space). CreateValueRef registers an ID for a value slot:
+
+1. If the ID is already registered for a *different* value slot → ignored (ID in use)
+2. If the value slot already has a *different* ID registered → ignored (slot has ID)
+3. Otherwise → the ID is registered for that value slot
+
+Once registered, the value ref can be used as an endpoint in relations. The value ref identifies the slot, not a specific value—it remains stable as the value changes over time.
+
+**Cross-space value refs:** The `space` field specifies which space contains the value. If omitted, defaults to the current space. This enables referencing values in other spaces for cross-space provenance.
+
+### 3.5 State Resolution
 
 Operations are validated **structurally** at write time and **semantically** at read time.
 
@@ -616,7 +690,7 @@ Operations are validated **structurally** at write time and **semantically** at 
 3. Tombstone dominance: updates after delete are ignored
 4. Return resolved state or DELETED status
 
-### 3.5 Serializer Requirements
+### 3.6 Serializer Requirements
 
 Indexers are lenient and will process edits even if they contain redundant or contradictory operations. However, spec-compliant clients SHOULD NOT produce such edits. Serializers SHOULD automatically rewrite operations to ensure clean output.
 
@@ -904,6 +978,7 @@ op_type values:
   6 = UpdateRelation
   7 = DeleteRelation
   8 = RestoreRelation
+  9 = CreateValueRef
 ```
 
 **CreateEntity:**
@@ -999,6 +1074,19 @@ id: ObjectRef
 **RestoreRelation:**
 ```
 id: ObjectRef
+```
+
+**CreateValueRef:**
+```
+id: ID
+entity: ObjectRef
+property: PropertyRef
+flags: uint8
+  bit 0 = has_language
+  bit 1 = has_space
+  bits 2-7 = reserved (must be 0)
+[if has_language]: language: LanguageRef
+[if has_space]: space: ID
 ```
 
 ### 6.5 Value Encoding
@@ -1172,6 +1260,7 @@ Indexers MUST reject edits that fail structural validation:
 | POINT bounds | Longitude outside [-180, +180] or latitude outside [-90, +90] |
 | POINT ordinate count | ordinate_count not 2 or 3 |
 | DATE format | Format/string mismatch, invalid month (>12), invalid day, invalid time components |
+| DATETIME timezone | Missing timezone |
 | Position strings | Empty, characters outside `0-9A-Za-z`, or length > 64 |
 | EMBEDDING dims | Data length doesn't match dims × bytes-per-element for subtype |
 | Zstd decompression | Decompressed size doesn't match declared `uncompressed_size` |
@@ -1225,6 +1314,8 @@ Decoders SHOULD reject zstd frames with trailing data after decompression.
 | CreateRelation | Endpoint DELETED | Relation created (dangling reference allowed) |
 | CreateEntity | Relation with same ID exists | Ignored (namespace collision) |
 | CreateRelation | Entity with same ID exists | Ignored (namespace collision) |
+| CreateValueRef | ID already registered for different slot | Ignored (ID in use) |
+| CreateValueRef | Slot already has different ID | Ignored (slot has ID) |
 
 Dangling references are permitted to support cross-space links and out-of-order edit arrival. Applications MAY enforce referential integrity at a higher layer.
 
