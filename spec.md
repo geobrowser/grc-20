@@ -21,7 +21,8 @@ GRC-20 v2 is a binary property graph format for decentralized knowledge networks
 |------|------------|
 | Entity | A node in the graph, identified by ID |
 | Relation | A directed edge between entities, identified by ID |
-| Object | Either an Entity or Relation (used when referencing both) |
+| Value Ref | A referenceable handle for a value slot, identified by ID |
+| Object | An Entity, Relation, or Value Ref (used when referencing all three) |
 | Property | An entity representing a named attribute |
 | Value | A property instance on an object |
 | Type | A classification tag for entities |
@@ -357,6 +358,8 @@ CreateRelation {
 
 Without a version pin, the relation refers to the current value. With a version pin, it refers to the historical value at that edit.
 
+**Version pin semantics (NORMATIVE):** When `to_version` (or `from_version`) is an edit ID, the reference resolves to the value as of the **end** of that edit—after all ops in that edit have been applied. This provides a deterministic snapshot point.
+
 **Cross-space value refs:** To reference a value in a different space, include the `space` field in CreateValueRef:
 
 ```
@@ -398,7 +401,12 @@ Relation {
 }
 ```
 
-**Endpoint constraint (NORMATIVE):** The `from` and `to` fields MUST reference entities or value refs, not relations. To create a meta-edge (a relation that references another relation), target the other relation's reified entity via its `entity` ID.
+**Endpoint constraint (NORMATIVE):** Relation endpoints must be entities or value refs, not relations:
+
+- When `from_is_value_ref = 0` (or `to_is_value_ref = 0`), the endpoint MUST reference an entity
+- When `from_is_value_ref = 1` (or `to_is_value_ref = 1`), the endpoint is a value ref ID
+- Endpoints referencing relations are invalid; to create a meta-edge, target the relation's reified entity via its `entity` ID
+- If an endpoint references a relation (type mismatch), the relation is treated as having a dangling reference per the "dangling references allowed" policy
 
 The `entity` field links to an entity that represents this relation as a node. This enables relations to be referenced by other relations (meta-edges) and to participate in the graph as first-class nodes. Values are stored on the reified entity, not on the relation itself.
 
@@ -451,19 +459,25 @@ midpoint("a", "b") = "aV"
 state(space_id, object_id) → Object | DELETED | NOT_FOUND
 ```
 
-The same object ID can have different state in different spaces. Multi-space views are computed by resolver policy and MUST preserve provenance.
+Where Object is an Entity, Relation, or Value Ref. The same object ID can have different state in different spaces. Multi-space views are computed by resolver policy and MUST preserve provenance.
 
-**Object ID namespace (NORMATIVE):** Entity IDs and Relation IDs share a single namespace within each space. A given UUID identifies exactly one kind of object:
+**Value Ref state:** For value refs, the state includes the slot binding (entity, property, language, space) determined by LWW resolution. Value refs are never DELETED (they are immutable once created).
+
+**Object ID namespace (NORMATIVE):** Entity IDs, Relation IDs, and Value Ref IDs share a single namespace within each space. A given UUID identifies exactly one kind of object:
 
 | Scenario | Resolution |
 |----------|------------|
 | CreateEntity where Relation with same ID exists | Ignored (ID already in use) |
+| CreateEntity where Value Ref with same ID exists | Ignored (ID already in use) |
 | CreateRelation where Entity with same ID exists | Ignored (ID already in use) |
+| CreateRelation where Value Ref with same ID exists | Ignored (ID already in use) |
 | CreateRelation with explicit `entity` that equals `relation.id` | Invalid; `entity` MUST differ from the relation ID |
+| CreateValueRef where Entity with same ID exists | Ignored (ID already in use) |
+| CreateValueRef where Relation with same ID exists | Ignored (ID already in use) |
 
 The auto-derived entity ID (`derived_uuid("grc20:relation-entity:" || relation_id)`) is guaranteed to differ from the relation ID due to the prefix, so this constraint only applies to explicit `entity` values in many-mode.
 
-**Rationale:** A single namespace simplifies the state model and prevents ambiguity in `state()` lookups. Reified entities are distinct objects that happen to represent relations as nodes.
+**Rationale:** A single namespace simplifies the state model and prevents ambiguity in `state()` lookups. Reified entities are distinct objects that happen to represent relations as nodes. Value refs are objects that represent handles to value slots.
 
 ### 2.8 Schema Constraints
 
@@ -665,15 +679,37 @@ CreateValueRef {
 
 Creates a referenceable ID for a value slot, enabling relations to target that value.
 
-**Semantics (NORMATIVE):** A value slot is identified by (entity, property, language, space). CreateValueRef registers an ID for a value slot:
+**Semantics (NORMATIVE):** A value slot is identified by (entity, property, language, space), where language is only present for TEXT properties. CreateValueRef proposes that a slot should have a given ID.
 
-1. If the ID is already registered for a *different* value slot → ignored (ID in use)
-2. If the value slot already has a *different* ID registered → ignored (slot has ID)
-3. Otherwise → the ID is registered for that value slot
+**Merge rules (NORMATIVE):** Value ref registration uses LWW semantics keyed by slot:
 
-Once registered, the value ref can be used as an endpoint in relations. The value ref identifies the slot, not a specific value—it remains stable as the value changes over time.
+- The authoritative mapping is `slot → value_ref_id`, resolved by LWW keyed on slot
+- When multiple CreateValueRef ops target the same slot, the op with the highest OpPosition wins
+- The reverse mapping `value_ref_id → slot` is derived: for a given ID, find all slots whose resolved slot→id equals that ID
+- If multiple slots resolve to the same ID (due to concurrent ops), relations targeting that ID resolve to the slot whose winning CreateValueRef had the highest OpPosition
+
+Once a value ref wins LWW for a slot, it can be used as an endpoint in relations. The value ref identifies the slot, not a specific value—it remains stable as the value changes over time.
 
 **Cross-space value refs:** The `space` field specifies which space contains the value. If omitted, defaults to the current space. This enables referencing values in other spaces for cross-space provenance.
+
+**Resolution order (NORMATIVE):** When a relation targets a value ref:
+
+1. Resolve the value ref's slot binding (entity, property, language, space) via LWW in the **relation's space**
+2. The slot's `space` field determines where the underlying value is read from
+3. The relation's `to_space` pin, if present, applies to the value ref object itself (which space's value ref binding to use), not where the underlying value lives
+4. The relation's `to_version` pin, if present, specifies which historical value to reference within the resolved slot
+
+**Language field (NORMATIVE):** The `language` field MUST only be present when the property's DataType (as declared in this edit's properties dictionary) is TEXT. For non-TEXT properties, `has_language` MUST be 0; violations are rejected (E005). This mirrors the language constraints on Value encoding.
+
+**Immutability (NORMATIVE):** Value refs cannot be deleted or modified once created. A value ref's slot binding is determined by LWW at resolution time. There is no DeleteValueRef or UpdateValueRef operation.
+
+**Indexer performance (RECOMMENDED):** To resolve value ref endpoints in O(1) time, indexers SHOULD maintain a reverse index:
+
+```
+value_ref_id → (winning_slot, winning_oppos)
+```
+
+This index is updated incrementally during replay. Without it, resolution requires scanning all slots that map to a given ID to find the highest OpPosition winner.
 
 ### 3.5 State Resolution
 
@@ -806,7 +842,9 @@ The property dictionary includes both ID and DataType. This allows values to omi
 
 **Unit dictionary requirement (NORMATIVE):** All units referenced in numerical values (INT64, FLOAT64, DECIMAL) MUST be declared in the `unit_ids` dictionary. Unit index 0 means no unit; indices 1+ reference `unit_ids[index-1]`. Only numerical values have the unit field.
 
-**Object dictionary requirement (NORMATIVE):** All objects (entities and relations) referenced in an edit MUST be declared in the `object_ids` dictionary. This includes: operation targets (UpdateEntity, DeleteEntity, etc.) and relation endpoints (`from`, `to`). CreateRelation encodes the relation ID inline, so it does not require a dictionary entry unless the relation is referenced by other ops in the same edit.
+**Object dictionary requirement (NORMATIVE):** All entities and relations referenced in an edit MUST be declared in the `object_ids` dictionary. This includes: operation targets (UpdateEntity, DeleteEntity, etc.) and relation endpoints when targeting entities. CreateRelation encodes the relation ID inline, so it does not require a dictionary entry unless referenced by other ops in the same edit.
+
+**Value ref endpoints:** Value ref IDs are NOT included in `object_ids`. When a relation endpoint targets a value ref, the ID is encoded inline (see Section 6.4) rather than as an ObjectRef. This avoids bloating the object dictionary with value ref IDs in provenance-heavy edits.
 
 **Size limits (NORMATIVE):** All dictionary counts MUST be ≤ 4,294,967,294 (0xFFFFFFFE). All reference indices MUST be < their respective dictionary count. Out-of-bounds indices MUST be rejected (E002).
 
@@ -903,6 +941,13 @@ zigzag(n) = (n << 1) ^ (n >> 63)
 ### 6.2 Common Reference Types
 
 All reference types are dictionary indices. External references are not supported—all referenced items must be declared in the appropriate dictionary.
+
+**ObjectRef:**
+```
+index: varint    // Must be < object_count
+```
+
+ObjectRef references entities and relations only (not value refs). Value refs are always referenced by inline ID in relation endpoints.
 
 **PropertyRef:**
 ```
@@ -1022,8 +1067,6 @@ id: ObjectRef
 ```
 id: ID
 type: RelationTypeRef
-from: ObjectRef
-to: ObjectRef
 flags: uint8
   bit 0 = has_from_space
   bit 1 = has_from_version
@@ -1031,7 +1074,12 @@ flags: uint8
   bit 3 = has_to_version
   bit 4 = has_entity           // If 0, entity is auto-derived from relation ID
   bit 5 = has_position
-  bits 6-7 = reserved (must be 0)
+  bit 6 = from_is_value_ref    // If 1, from is inline ID; if 0, from is ObjectRef
+  bit 7 = to_is_value_ref      // If 1, to is inline ID; if 0, to is ObjectRef
+[if from_is_value_ref]: from: ID
+[else]: from: ObjectRef
+[if to_is_value_ref]: to: ID
+[else]: to: ObjectRef
 [if has_from_space]: from_space: ID
 [if has_from_version]: from_version: ID
 [if has_to_space]: to_space: ID
@@ -1039,6 +1087,8 @@ flags: uint8
 [if has_entity]: entity: ID    // Explicit reified entity
 [if has_position]: position: String
 ```
+
+**Endpoint encoding:** Entity and relation endpoints use ObjectRef (dictionary index). Value ref endpoints use inline ID (16 bytes) to avoid bloating the object dictionary. The `from_is_value_ref` and `to_is_value_ref` flags indicate which encoding is used.
 
 **Entity derivation:** When `has_entity = 0`, the entity ID is computed as `derived_uuid("grc20:relation-entity:" || relation_id)`.
 
@@ -1266,6 +1316,7 @@ Indexers MUST reject edits that fail structural validation:
 | Zstd decompression | Decompressed size doesn't match declared `uncompressed_size` |
 | Float values | NaN payload (see float rules in Section 2.5) |
 | Relation entity self-reference | CreateRelation has explicit `entity` equal to relation ID |
+| CreateValueRef language mismatch | `has_language = 1` but property's DataType is not TEXT |
 
 **Implementation-defined limits:** This specification does not mandate limits on ops per edit, values per entity, or TEXT/BYTES payload sizes. Implementations and governance systems MAY impose their own limits to prevent resource exhaustion.
 
@@ -1313,9 +1364,15 @@ Decoders SHOULD reject zstd frames with trailing data after decompression.
 | CreateRelation | Endpoint NOT_FOUND | Relation created (dangling reference allowed) |
 | CreateRelation | Endpoint DELETED | Relation created (dangling reference allowed) |
 | CreateEntity | Relation with same ID exists | Ignored (namespace collision) |
+| CreateEntity | Value Ref with same ID exists | Ignored (namespace collision) |
 | CreateRelation | Entity with same ID exists | Ignored (namespace collision) |
-| CreateValueRef | ID already registered for different slot | Ignored (ID in use) |
-| CreateValueRef | Slot already has different ID | Ignored (slot has ID) |
+| CreateRelation | Value Ref with same ID exists | Ignored (namespace collision) |
+| CreateValueRef | Entity with same ID exists | Ignored (namespace collision) |
+| CreateValueRef | Relation with same ID exists | Ignored (namespace collision) |
+| CreateValueRef | Same slot, different IDs | LWW by OpPosition (slot → id mapping) |
+| CreateValueRef | Same ID, different slots | All registrations proceed; id → slot is derived (see Section 3.4) |
+| CreateRelation | `from_is_value_ref = 0` but `from` resolves to a relation | Treated as dangling reference (endpoint type mismatch) |
+| CreateRelation | `to_is_value_ref = 0` but `to` resolves to a relation | Treated as dangling reference (endpoint type mismatch) |
 
 Dangling references are permitted to support cross-space links and out-of-order edit arrival. Applications MAY enforce referential integrity at a higher layer.
 
