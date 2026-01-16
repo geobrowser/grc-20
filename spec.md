@@ -58,8 +58,6 @@ When deriving from string prefixes (e.g., `"grc20:relation-entity:"`), the strin
 
 **Display format:** Non-hyphenated lowercase hex is RECOMMENDED. Implementations MAY accept hyphenated or Base58 on input.
 
-**Interning:** Properties and relation types are stored once in schema dictionaries (Section 4.3) and referenced by index throughout the edit. Types are entities referenced via the object dictionary.
-
 ### 2.2 Entities
 
 ```
@@ -360,18 +358,6 @@ Without a version pin, the relation refers to the current value. With a version 
 
 **Version pin semantics (NORMATIVE):** When `to_version` (or `from_version`) is an edit ID, the reference resolves to the value as of the **end** of that edit—after all ops in that edit have been applied. This provides a deterministic snapshot point.
 
-**Cross-space value refs:** To reference a value in a different space, include the `space` field in CreateValueRef:
-
-```
-// Register a reference to Alice's birthdate in Space X
-CreateValueRef {
-  id: <value_ref_id>
-  entity: Alice
-  property: birthDate
-  space: SpaceX
-}
-```
-
 **Value uniqueness:**
 
 Values are unique per (entityId, propertyId), with TEXT values additionally differentiated by language. Setting a value replaces any existing value for that (property, language) combination. For ordered or multiple values, use relations with positions.
@@ -531,7 +517,7 @@ UpdateEntity {
 
 UnsetValue {
   property: ID
-  language: ALL | ID?    // TEXT only: ALL = clear all, absent = non-linguistic, ID = specific language
+  language: ALL | ID?    // TEXT only: ALL = clear all, absent = English, ID = specific language
 }
 ```
 
@@ -542,7 +528,7 @@ UnsetValue {
 
 **`set` semantics (NORMATIVE):** For a given property (and language, for TEXT), `set` replaces the existing value. For TEXT values, each language is treated independently—setting a value for one language does not affect values in other languages.
 
-**`unset` semantics (NORMATIVE):** Clears values for properties. For TEXT properties, the `language` field specifies which slot to clear: `ALL` clears all language slots, absent clears the non-linguistic slot, and a specific language ID clears that language slot. For non-TEXT properties, `language` MUST be `ALL` and the single value is cleared.
+**`unset` semantics (NORMATIVE):** Clears values for properties. For TEXT properties, the `language` field specifies which slot to clear: `ALL` clears all language slots, absent clears the English slot, and a specific language ID clears that language slot. For non-TEXT properties, `language` MUST be `ALL` and the single value is cleared.
 
 **Application order within op (NORMATIVE):**
 1. `unset`
@@ -838,7 +824,7 @@ The property dictionary includes both ID and DataType. This allows values to omi
 
 **Relation type dictionary requirement (NORMATIVE):** All relation types referenced in an edit MUST be declared in the `relation_type_ids` dictionary.
 
-**Language dictionary requirement (NORMATIVE):** All languages referenced in TEXT values MUST be declared in the `language_ids` dictionary. Language index 0 means non-linguistic (language-agnostic content; no entry required); indices 1+ reference `language_ids[index-1]`. Only TEXT values have the language field. To store linguistic text (including English), the appropriate language ID must be in the dictionary.
+**Language dictionary requirement (NORMATIVE):** All languages referenced in TEXT values MUST be declared in the `language_ids` dictionary. Language index 0 means English (no entry required); indices 1+ reference `language_ids[index-1]`. Only TEXT values have the language field.
 
 **Unit dictionary requirement (NORMATIVE):** All units referenced in numerical values (INT64, FLOAT64, DECIMAL) MUST be declared in the `unit_ids` dictionary. Unit index 0 means no unit; indices 1+ reference `unit_ids[index-1]`. Only numerical values have the unit field.
 
@@ -961,7 +947,7 @@ index: varint    // Must be < relation_type_count
 
 **LanguageRef:**
 ```
-index: varint    // 0 = non-linguistic, 1+ = language_ids[index-1]
+index: varint    // 0 = English, 1+ = language_ids[index-1]
 ```
 
 **UnitRef:**
@@ -1050,7 +1036,7 @@ flags: uint8
 
 UnsetValue:
   property: PropertyRef
-  language: varint    // 0xFFFFFFFF = clear all languages, otherwise LanguageRef (0 = non-linguistic, 1+ = specific language)
+  language: varint    // 0xFFFFFFFF = clear all languages, otherwise LanguageRef (0 = English, 1+ = specific language)
 ```
 
 **DeleteEntity:**
@@ -1151,7 +1137,7 @@ Value:
 
 The payload type is determined by the property's DataType (from the properties dictionary).
 
-**Language (TEXT only):** The `language` field is only present for TEXT values. A value with `language = 0` is non-linguistic (language-agnostic content such as URLs, identifiers, codes, or formulas). Values with different languages for the same property are distinct and can coexist. To store English text, use the well-known English language ID (Section 7.4).
+**Language (TEXT only):** The `language` field is only present for TEXT values. A value with `language = 0` is English. Values with different languages for the same property are distinct and can coexist.
 
 **Unit (numerical types only):** The `unit` field is only present for INT64, FLOAT64, and DECIMAL values. A value with `unit = 0` has no unit. Unlike language, unit does NOT affect value uniqueness—it is metadata for interpretation only.
 

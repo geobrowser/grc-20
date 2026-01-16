@@ -163,12 +163,12 @@ fn decode_update_entity<'a>(
             }
             let property = dicts.properties[prop_index].0;
 
-            // Language encoding: 0xFFFFFFFF = all, 0 = non-linguistic, 1+ = specific language
+            // Language encoding: 0xFFFFFFFF = all, 0 = English, 1+ = specific language
             let lang_value = reader.read_varint("unset.language")? as u32;
             let language = if lang_value == 0xFFFFFFFF {
                 UnsetLanguage::All
             } else if lang_value == 0 {
-                UnsetLanguage::NonLinguistic
+                UnsetLanguage::English
             } else {
                 let idx = (lang_value - 1) as usize;
                 if idx >= dicts.languages.len() {
@@ -488,9 +488,9 @@ fn decode_create_value_ref<'a>(
             });
         }
         let lang_index = reader.read_varint("language")? as usize;
-        // Language index 0 = non-linguistic (no language), 1+ = language_ids[index-1]
+        // Language index 0 = English, 1+ = language_ids[index-1]
         if lang_index == 0 {
-            None // Non-linguistic
+            None // English (no explicit ID needed)
         } else {
             let idx = lang_index - 1;
             if idx >= dicts.languages.len() {
@@ -604,10 +604,10 @@ fn encode_update_entity(
             // We need the data type to add to dictionary, use a placeholder
             let idx = dict_builder.add_property(unset.property, DataType::Bool);
             writer.write_varint(idx as u64);
-            // Language encoding: 0xFFFFFFFF = all, 0 = non-linguistic, 1+ = specific language
+            // Language encoding: 0xFFFFFFFF = all, 0 = English, 1+ = specific language
             let lang_value: u32 = match &unset.language {
                 UnsetLanguage::All => 0xFFFFFFFF,
-                UnsetLanguage::NonLinguistic => 0,
+                UnsetLanguage::English => 0,
                 UnsetLanguage::Specific(lang_id) => {
                     let lang_index = dict_builder.add_language(Some(*lang_id));
                     lang_index as u32

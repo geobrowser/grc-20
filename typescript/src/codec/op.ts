@@ -160,7 +160,7 @@ function encodeUnsetLanguage(writer: Writer, lang: UnsetLanguage, dicts: Diction
     case "all":
       writer.writeVarint(0xffffffffn); // 0xFFFFFFFF
       break;
-    case "nonLinguistic":
+    case "english":
       writer.writeVarintNumber(0);
       break;
     case "specific":
@@ -376,7 +376,7 @@ function decodeUnsetLanguage(reader: Reader, dicts: DictionaryLookups): UnsetLan
   if (langValue === 0xffffffffn) {
     return { type: "all" };
   } else if (langValue === 0n) {
-    return { type: "nonLinguistic" };
+    return { type: "english" };
   } else {
     const language = dicts.getLanguage(Number(langValue));
     if (!language) {

@@ -615,7 +615,7 @@ fn encode_op_canonical(
                     writer.write_varint(prop_idx as u64);
                     let lang_value: u32 = match &unset.language {
                         UnsetLanguage::All => 0xFFFFFFFF,
-                        UnsetLanguage::NonLinguistic => 0,
+                        UnsetLanguage::English => 0,
                         UnsetLanguage::Specific(lang_id) => {
                             dict_builder.add_language(Some(*lang_id)) as u32
                         }
@@ -696,7 +696,7 @@ fn sort_and_check_unsets(
             let prop_idx = dict_builder.get_property_index(&up.property).unwrap_or(0);
             let lang_key: u32 = match &up.language {
                 UnsetLanguage::All => 0xFFFFFFFF,
-                UnsetLanguage::NonLinguistic => 0,
+                UnsetLanguage::English => 0,
                 UnsetLanguage::Specific(lang_id) => {
                     dict_builder.get_language_index(Some(lang_id)).unwrap_or(0) as u32
                 }
@@ -714,7 +714,7 @@ fn sort_and_check_unsets(
             let up = indexed[i].3;
             let language = match &up.language {
                 UnsetLanguage::All => None,
-                UnsetLanguage::NonLinguistic => None,
+                UnsetLanguage::English => None,
                 UnsetLanguage::Specific(id) => Some(*id),
             };
             return Err(EncodeError::DuplicateUnset {

@@ -69,8 +69,8 @@ pub struct UpdateEntity<'a> {
 pub enum UnsetLanguage {
     /// Clear all language slots (wire format: 0xFFFFFFFF).
     All,
-    /// Clear only the non-linguistic slot (wire format: 0).
-    NonLinguistic,
+    /// Clear only the English slot (wire format: 0).
+    English,
     /// Clear a specific language slot (wire format: 1+).
     Specific(Id),
 }
@@ -87,7 +87,7 @@ pub struct UnsetValue {
     /// The property whose value to clear.
     pub property: Id,
     /// Which language slot(s) to clear.
-    /// For TEXT properties: All clears all slots, NonLinguistic clears non-linguistic slot,
+    /// For TEXT properties: All clears all slots, English clears English slot,
     ///   Specific clears a specific language slot.
     /// For non-TEXT properties: must be All.
     pub language: UnsetLanguage,
@@ -99,9 +99,9 @@ impl UnsetValue {
         Self { property, language: UnsetLanguage::All }
     }
 
-    /// Creates an UnsetValue that clears the non-linguistic slot for a TEXT property.
-    pub fn non_linguistic(property: Id) -> Self {
-        Self { property, language: UnsetLanguage::NonLinguistic }
+    /// Creates an UnsetValue that clears the English slot for a TEXT property.
+    pub fn english(property: Id) -> Self {
+        Self { property, language: UnsetLanguage::English }
     }
 
     /// Creates an UnsetValue that clears a specific language for a TEXT property.

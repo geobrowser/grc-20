@@ -581,11 +581,11 @@ impl<'a> UpdateEntityBuilder<'a> {
         self
     }
 
-    /// Unsets the non-linguistic value for a property.
-    pub fn unset_non_linguistic(mut self, property: Id) -> Self {
+    /// Unsets the English value for a property.
+    pub fn unset_english(mut self, property: Id) -> Self {
         self.unset_values.push(UnsetValue {
             property,
-            language: UnsetLanguage::NonLinguistic,
+            language: UnsetLanguage::English,
         });
         self
     }

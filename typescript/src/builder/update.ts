@@ -191,10 +191,10 @@ export class UpdateEntityBuilder {
   }
 
   /**
-   * Unsets the non-linguistic value for a property.
+   * Unsets the English value for a property.
    */
-  unsetNonLinguistic(property: Id): this {
-    this._unset.push({ property, language: { type: "nonLinguistic" } });
+  unsetEnglish(property: Id): this {
+    this._unset.push({ property, language: { type: "english" } });
     return this;
   }
 

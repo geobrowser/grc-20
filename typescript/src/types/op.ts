@@ -6,7 +6,7 @@ import type { PropertyValue } from "./value.js";
  */
 export type UnsetLanguage =
   | { type: "all" }
-  | { type: "nonLinguistic" }
+  | { type: "english" }
   | { type: "specific"; language: Id };
 
 /**
