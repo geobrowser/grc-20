@@ -11,11 +11,6 @@ enum DataType {
     RELATION = 5;
 }
 
-message Property {
-    bytes id = 1;
-    DataType data_type = 2;
-}
-
 message UnsetEntityValues {
   bytes id = 1;
   repeated bytes properties = 2;
@@ -87,9 +82,8 @@ message Op {
     Relation           create_relation = 2;
     RelationUpdate     update_relation = 3;
     bytes              delete_relation = 4;
-    Property           create_property = 5;
-    UnsetEntityValues        unset_entity_values = 6;
-    UnsetRelationFields      unset_relation_fields = 7;
+    UnsetEntityValues        unset_entity_values = 5;
+    UnsetRelationFields      unset_relation_fields = 6;
   }
 }
 

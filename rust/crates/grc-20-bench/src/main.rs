@@ -7,9 +7,7 @@ use std::fs;
 use std::path::Path;
 use std::time::Instant;
 
-use grc_20::{
-    EditBuilder, EncodeOptions, EntityBuilder, Id, Op, derived_uuid,
-};
+use grc_20::{EditBuilder, EncodeOptions, EntityBuilder, Id, Op, derived_uuid};
 
 /// Creates a deterministic relation ID from from+to+type (to maintain same behavior as removed unique mode).
 fn make_relation_id(from: Id, to: Id, rel_type: Id) -> Id {
