@@ -136,6 +136,46 @@ const edit = new EditBuilder(editId)
   .build();
 ```
 
+### Ops (Functional API)
+
+`createEdit` defaults `id` to `randomId()` and `createdAt` to `0n` when omitted.
+
+```typescript
+import {
+  createEdit,
+  createEntity,
+  createRelation,
+  randomId,
+  properties,
+  relationTypes,
+} from "@geoprotocol/grc-20";
+
+const entityId = randomId();
+const authorId = randomId();
+
+const ops = [
+  createEntity({
+    id: entityId,
+    values: [
+      { property: properties.name(), value: { type: "text", value: "Alice" } },
+      { property: properties.description(), value: { type: "text", value: "A person" } },
+    ],
+  }),
+  createRelation({
+    id: randomId(),
+    relationType: relationTypes.types(),
+    from: entityId,
+    to: randomId(),
+  }),
+];
+
+const edit = createEdit({
+  name: "Create Alice",
+  author: authorId,
+  ops,
+});
+```
+
 ### Codec
 
 ```typescript

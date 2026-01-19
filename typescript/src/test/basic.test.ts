@@ -1,6 +1,16 @@
 import { describe, it, expect } from "vitest";
 import {
   EditBuilder,
+  createEdit,
+  createEntity,
+  createRelation,
+  updateEntity,
+  deleteEntity,
+  restoreEntity,
+  updateRelation,
+  deleteRelation,
+  restoreRelation,
+  createValueRef,
   encodeEdit,
   decodeEdit,
   encodeEditCompressed,
@@ -142,6 +152,7 @@ describe("EditBuilder", () => {
     expect(idsEqual(edit.id, editId)).toBe(true);
     expect(edit.name).toBe("Test Edit");
     expect(edit.authors.length).toBe(1);
+    expect(idsEqual(edit.authors[0], authorId)).toBe(true);
     expect(edit.createdAt).toBe(1234567890n);
     expect(edit.ops.length).toBe(1);
     expect(edit.ops[0].type).toBe("createEntity");
@@ -192,6 +203,390 @@ describe("EditBuilder", () => {
     if (op.type === "updateEntity") {
       expect(op.set.length).toBe(1);
       expect(op.unset.length).toBe(1);
+    }
+  });
+});
+
+describe("Ops helpers", () => {
+  it("creates edits from op factories", () => {
+    const editId = randomId();
+    const entityId = randomId();
+    const authorId = randomId();
+    const propId = randomId();
+    const relationId = randomId();
+    const from = randomId();
+    const to = randomId();
+
+    const ops = [
+      createEntity({
+        id: entityId,
+        values: [{ property: propId, value: { type: "bool", value: true } }],
+      }),
+      createRelation({
+        id: relationId,
+        relationType: relationTypes.types(),
+        from,
+        to,
+      }),
+      updateEntity({
+        id: entityId,
+        set: [
+          {
+            property: properties.description(),
+            value: { type: "text", value: "Updated" },
+          },
+        ],
+      }),
+    ];
+
+    const edit = createEdit({
+      id: editId,
+      name: "Ops Edit",
+      author: authorId,
+      createdAt: 10n,
+      ops,
+    });
+
+    expect(idsEqual(edit.id, editId)).toBe(true);
+    expect(edit.name).toBe("Ops Edit");
+    expect(edit.authors.length).toBe(1);
+    expect(idsEqual(edit.authors[0], authorId)).toBe(true);
+    expect(edit.createdAt).toBe(10n);
+    expect(edit.ops.length).toBe(3);
+    expect(edit.ops[0].type).toBe("createEntity");
+  });
+
+  it("creates deleteEntity operations", () => {
+    const entityId = randomId();
+
+    const op = deleteEntity(entityId);
+
+    expect(op.type).toBe("deleteEntity");
+    expect(idsEqual(op.id, entityId)).toBe(true);
+  });
+
+  it("creates restoreEntity operations", () => {
+    const entityId = randomId();
+
+    const op = restoreEntity(entityId);
+
+    expect(op.type).toBe("restoreEntity");
+    expect(idsEqual(op.id, entityId)).toBe(true);
+  });
+
+  it("creates updateRelation operations", () => {
+    const relationId = randomId();
+
+    const op = updateRelation({
+      id: relationId,
+      position: "newpos",
+    });
+
+    expect(op.type).toBe("updateRelation");
+    expect(idsEqual(op.id, relationId)).toBe(true);
+    expect(op.position).toBe("newpos");
+    expect(op.unset).toEqual([]);
+  });
+
+  it("creates deleteRelation operations", () => {
+    const relationId = randomId();
+
+    const op = deleteRelation(relationId);
+
+    expect(op.type).toBe("deleteRelation");
+    expect(idsEqual(op.id, relationId)).toBe(true);
+  });
+
+  it("creates restoreRelation operations", () => {
+    const relationId = randomId();
+
+    const op = restoreRelation(relationId);
+
+    expect(op.type).toBe("restoreRelation");
+    expect(idsEqual(op.id, relationId)).toBe(true);
+  });
+
+  it("creates createValueRef operations", () => {
+    const refId = randomId();
+    const entityId = randomId();
+    const propId = randomId();
+    const langId = randomId();
+    const spaceId = randomId();
+
+    const op = createValueRef({
+      id: refId,
+      entity: entityId,
+      property: propId,
+      language: langId,
+      space: spaceId,
+    });
+
+    expect(op.type).toBe("createValueRef");
+    expect(idsEqual(op.id, refId)).toBe(true);
+    expect(idsEqual(op.entity, entityId)).toBe(true);
+    expect(idsEqual(op.property, propId)).toBe(true);
+    expect(idsEqual(op.language!, langId)).toBe(true);
+    expect(idsEqual(op.space!, spaceId)).toBe(true);
+  });
+
+  it("creates createValueRef without optional fields", () => {
+    const refId = randomId();
+    const entityId = randomId();
+    const propId = randomId();
+
+    const op = createValueRef({
+      id: refId,
+      entity: entityId,
+      property: propId,
+    });
+
+    expect(op.type).toBe("createValueRef");
+    expect(idsEqual(op.id, refId)).toBe(true);
+    expect(op.language).toBeUndefined();
+    expect(op.space).toBeUndefined();
+  });
+});
+
+describe("Builder vs Ops API Equivalence", () => {
+  it("produces identical encoding for createEntity", () => {
+    const editId = parseId("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")!;
+    const entityId = parseId("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")!;
+
+    // Using EditBuilder
+    const builderEdit = new EditBuilder(editId)
+      .setCreatedAt(1000n)
+      .createEntity(entityId, (e) =>
+        e.text(properties.name(), "Test", undefined)
+      )
+      .build();
+
+    // Using Ops API
+    const opsEdit = createEdit({
+      id: editId,
+      createdAt: 1000n,
+      ops: [
+        createEntity({
+          id: entityId,
+          values: [
+            { property: properties.name(), value: { type: "text", value: "Test" } },
+          ],
+        }),
+      ],
+    });
+
+    const builderEncoded = encodeEdit(builderEdit, { canonical: true });
+    const opsEncoded = encodeEdit(opsEdit, { canonical: true });
+
+    expect(builderEncoded.length).toBe(opsEncoded.length);
+    for (let i = 0; i < builderEncoded.length; i++) {
+      expect(builderEncoded[i]).toBe(opsEncoded[i]);
+    }
+  });
+
+  it("produces identical encoding for updateEntity", () => {
+    const editId = parseId("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")!;
+    const entityId = parseId("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")!;
+    const propId = parseId("cccccccccccccccccccccccccccccccc")!;
+
+    // Using EditBuilder
+    const builderEdit = new EditBuilder(editId)
+      .setCreatedAt(1000n)
+      .updateEntity(entityId, (u) =>
+        u.setText(propId, "Updated", undefined)
+         .unsetAll(properties.description())
+      )
+      .build();
+
+    // Using Ops API
+    const opsEdit = createEdit({
+      id: editId,
+      createdAt: 1000n,
+      ops: [
+        updateEntity({
+          id: entityId,
+          set: [{ property: propId, value: { type: "text", value: "Updated" } }],
+          unset: [{ property: properties.description(), language: { type: "all" } }],
+        }),
+      ],
+    });
+
+    const builderEncoded = encodeEdit(builderEdit, { canonical: true });
+    const opsEncoded = encodeEdit(opsEdit, { canonical: true });
+
+    expect(builderEncoded.length).toBe(opsEncoded.length);
+    for (let i = 0; i < builderEncoded.length; i++) {
+      expect(builderEncoded[i]).toBe(opsEncoded[i]);
+    }
+  });
+
+  it("produces identical encoding for createRelation", () => {
+    const editId = parseId("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")!;
+    const relationId = parseId("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")!;
+    const from = parseId("cccccccccccccccccccccccccccccccc")!;
+    const to = parseId("dddddddddddddddddddddddddddddddd")!;
+
+    // Using EditBuilder
+    const builderEdit = new EditBuilder(editId)
+      .setCreatedAt(1000n)
+      .createRelationSimple(relationId, from, to, relationTypes.types())
+      .build();
+
+    // Using Ops API
+    const opsEdit = createEdit({
+      id: editId,
+      createdAt: 1000n,
+      ops: [
+        createRelation({
+          id: relationId,
+          relationType: relationTypes.types(),
+          from,
+          to,
+        }),
+      ],
+    });
+
+    const builderEncoded = encodeEdit(builderEdit, { canonical: true });
+    const opsEncoded = encodeEdit(opsEdit, { canonical: true });
+
+    expect(builderEncoded.length).toBe(opsEncoded.length);
+    for (let i = 0; i < builderEncoded.length; i++) {
+      expect(builderEncoded[i]).toBe(opsEncoded[i]);
+    }
+  });
+
+  it("produces identical encoding for delete/restore operations", () => {
+    const editId = parseId("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")!;
+    const entityId = parseId("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")!;
+    const relationId = parseId("cccccccccccccccccccccccccccccccc")!;
+
+    // Using EditBuilder
+    const builderEdit = new EditBuilder(editId)
+      .setCreatedAt(1000n)
+      .deleteEntity(entityId)
+      .restoreEntity(entityId)
+      .deleteRelation(relationId)
+      .restoreRelation(relationId)
+      .build();
+
+    // Using Ops API
+    const opsEdit = createEdit({
+      id: editId,
+      createdAt: 1000n,
+      ops: [
+        deleteEntity(entityId),
+        restoreEntity(entityId),
+        deleteRelation(relationId),
+        restoreRelation(relationId),
+      ],
+    });
+
+    const builderEncoded = encodeEdit(builderEdit, { canonical: true });
+    const opsEncoded = encodeEdit(opsEdit, { canonical: true });
+
+    expect(builderEncoded.length).toBe(opsEncoded.length);
+    for (let i = 0; i < builderEncoded.length; i++) {
+      expect(builderEncoded[i]).toBe(opsEncoded[i]);
+    }
+  });
+
+  it("produces identical encoding for complex multi-op edits", () => {
+    const editId = parseId("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")!;
+    const authorId = parseId("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")!;
+    const entity1 = parseId("11111111111111111111111111111111")!;
+    const entity2 = parseId("22222222222222222222222222222222")!;
+    const relationId = parseId("33333333333333333333333333333333")!;
+    const propId = parseId("44444444444444444444444444444444")!;
+
+    // Using EditBuilder
+    const builderEdit = new EditBuilder(editId)
+      .setName("Complex Edit")
+      .addAuthor(authorId)
+      .setCreatedAt(1000n)
+      .createEntity(entity1, (e) =>
+        e.text(properties.name(), "Entity One", undefined)
+         .bool(propId, true)
+      )
+      .createEntity(entity2, (e) =>
+        e.text(properties.name(), "Entity Two", undefined)
+      )
+      .createRelationSimple(relationId, entity1, entity2, relationTypes.types())
+      .updateEntity(entity1, (u) =>
+        u.setText(properties.description(), "Updated description", undefined)
+      )
+      .build();
+
+    // Using Ops API
+    const opsEdit = createEdit({
+      id: editId,
+      name: "Complex Edit",
+      author: authorId,
+      createdAt: 1000n,
+      ops: [
+        createEntity({
+          id: entity1,
+          values: [
+            { property: properties.name(), value: { type: "text", value: "Entity One" } },
+            { property: propId, value: { type: "bool", value: true } },
+          ],
+        }),
+        createEntity({
+          id: entity2,
+          values: [
+            { property: properties.name(), value: { type: "text", value: "Entity Two" } },
+          ],
+        }),
+        createRelation({
+          id: relationId,
+          relationType: relationTypes.types(),
+          from: entity1,
+          to: entity2,
+        }),
+        updateEntity({
+          id: entity1,
+          set: [
+            { property: properties.description(), value: { type: "text", value: "Updated description" } },
+          ],
+        }),
+      ],
+    });
+
+    const builderEncoded = encodeEdit(builderEdit, { canonical: true });
+    const opsEncoded = encodeEdit(opsEdit, { canonical: true });
+
+    expect(builderEncoded.length).toBe(opsEncoded.length);
+    for (let i = 0; i < builderEncoded.length; i++) {
+      expect(builderEncoded[i]).toBe(opsEncoded[i]);
+    }
+  });
+
+  it("produces identical encoding for updateRelation", () => {
+    const editId = parseId("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")!;
+    const relationId = parseId("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")!;
+
+    // Using EditBuilder
+    const builderEdit = new EditBuilder(editId)
+      .setCreatedAt(1000n)
+      .updateRelation(relationId, (u) => u.setPosition("abc"))
+      .build();
+
+    // Using Ops API
+    const opsEdit = createEdit({
+      id: editId,
+      createdAt: 1000n,
+      ops: [
+        updateRelation({
+          id: relationId,
+          position: "abc",
+        }),
+      ],
+    });
+
+    const builderEncoded = encodeEdit(builderEdit, { canonical: true });
+    const opsEncoded = encodeEdit(opsEdit, { canonical: true });
+
+    expect(builderEncoded.length).toBe(opsEncoded.length);
+    for (let i = 0; i < builderEncoded.length; i++) {
+      expect(builderEncoded[i]).toBe(opsEncoded[i]);
     }
   });
 });
