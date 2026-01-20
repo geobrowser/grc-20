@@ -6,7 +6,7 @@ GRC-20 is designed for encoding, decoding, and synchronizing graph data across d
 
 ## Features
 
-- **Property Graph Model** — Entities, relations, and typed properties with 10+ data types
+- **Property Graph Model** — Entities, relations, and typed properties with 12 data types
 - **Event Sourced** — All state changes expressed as append-only operations
 - **Binary Optimized** — Dictionary interning and zstd compression for minimal wire size
 - **Deterministic** — Canonical encoding for content addressing and signatures
@@ -32,14 +32,13 @@ npm install @geoprotocol/grc-20
 ### Rust
 
 ```rust
-use grc_20::{EditBuilder, DataType, encode_edit, decode_edit};
+use grc_20::{EditBuilder, encode_edit, decode_edit, genesis::properties};
 
 // Create an edit with entities and relations
 let edit = EditBuilder::new(edit_id)
     .name("My Edit")
     .author(author_id)
-    .create_property(name_prop, DataType::Text)
-    .create_entity(entity_id, |e| e.text(name_prop, "Hello", None))
+    .create_entity(entity_id, |e| e.text(properties::name(), "Hello", None))
     .build();
 
 // Encode to binary
@@ -73,13 +72,15 @@ const decoded = decodeEdit(bytes);
 | Type | Description |
 |------|-------------|
 | `BOOL` | Boolean value |
-| `INT64` | 64-bit signed integer |
-| `FLOAT64` | IEEE 754 double precision |
-| `DECIMAL` | Arbitrary-precision decimal |
-| `TEXT` | UTF-8 string with optional language |
+| `INT64` | 64-bit signed integer (with optional unit) |
+| `FLOAT64` | IEEE 754 double precision (with optional unit) |
+| `DECIMAL` | Arbitrary-precision decimal (with optional unit) |
+| `TEXT` | UTF-8 string (with optional language) |
 | `BYTES` | Opaque byte array |
-| `TIMESTAMP` | Microseconds since epoch |
-| `DATE` | ISO 8601 date with variable precision |
+| `DATE` | ISO 8601 date (year, month, or day precision) |
+| `TIME` | ISO 8601 time (HH:MM:SS with optional timezone) |
+| `DATETIME` | ISO 8601 date-time with timezone |
+| `SCHEDULE` | Recurring schedule (cron-like) |
 | `POINT` | WGS84 coordinates (lat, lon) |
 | `EMBEDDING` | Dense vectors for semantic search |
 
@@ -88,14 +89,57 @@ const decoded = decodeEdit(bytes);
 | Operation | Description |
 |-----------|-------------|
 | `CreateEntity` | Create or upsert an entity with values |
-| `UpdateEntity` | Modify entity values |
+| `UpdateEntity` | Modify entity values (set/unset) |
 | `DeleteEntity` | Tombstone an entity |
 | `RestoreEntity` | Restore a deleted entity |
-| `CreateRelation` | Create a directed edge |
-| `UpdateRelation` | Update relation position |
+| `CreateRelation` | Create a directed edge with optional position and space/version pins |
+| `UpdateRelation` | Update relation position or mutable fields |
 | `DeleteRelation` | Tombstone a relation |
 | `RestoreRelation` | Restore a deleted relation |
-| `CreateProperty` | Define a property in the schema |
+| `CreateValueRef` | Create a referenceable value for use in relations |
+
+## Advanced Features
+
+### Value References
+
+Value references allow creating referenceable values that can be used as relation endpoints:
+
+```typescript
+// Create a value ref that can be targeted by relations
+.createValueRef(valueRefId, entityId, propId, value)
+```
+
+### Multi-Language Support
+
+TEXT values support language variants via BCP 47 language IDs:
+
+```typescript
+// Set text with language
+e.text(nameProp, "Hello", languages.english())
+e.text(nameProp, "Hola", languages.spanish())
+
+// Unset specific language variant
+u.unsetText(nameProp, languages.english())
+```
+
+### Relation Features
+
+Relations support advanced features for knowledge graphs:
+
+- **Space Pins** — Pin relation to a specific space version
+- **Version Pins** — Pin endpoints to specific entity versions
+- **Position** — Lexicographic ordering for relation lists
+- **Reification** — Relations can target value refs for statement-level metadata
+
+### Canonical Encoding
+
+For content addressing and deterministic hashing:
+
+```typescript
+const bytes = encodeEdit(edit, { canonical: true });
+```
+
+Canonical mode ensures identical edits produce identical bytes regardless of construction order.
 
 ## Binary Format
 
@@ -198,6 +242,8 @@ npm test
 - [Specification](spec.md) — Complete binary format specification
 - [Requirements](docs/requirements.md) — Design requirements and priorities
 - [Design FAQ](docs/design-faq.md) — Rationale for design decisions
+
+Conforms to GRC-20 v2 specification version 0.19.0.
 
 ## Why GRC-20?
 

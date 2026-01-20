@@ -100,6 +100,7 @@ import {
   EntityBuilder,        // Build entity values
   UpdateEntityBuilder,  // Build update operations
   RelationBuilder,      // Build relation operations
+  UpdateRelationBuilder,// Build relation update operations
 } from "@geoprotocol/grc-20";
 ```
 
@@ -114,15 +115,19 @@ const edit = new EditBuilder(editId)
     .text(propId, "value", languageId)
     .int64(propId, 42n, unitId)
     .float64(propId, 3.14, undefined)
+    .decimal(propId, { exponent: -2, mantissa: 1234n }, undefined)
     .bool(propId, true)
     .bytes(propId, new Uint8Array([1, 2, 3]))
     .point(propId, 40.7128, -74.006)
     .date(propId, "2024-01-15")
+    .time(propId, "10:30:00")
     .datetime(propId, "2024-01-15T10:30:00Z")
   )
   .updateEntity(entityId, u => u
     .setText(propId, "new value", undefined)
-    .unsetAll(propId)
+    .setInt64(propId, 100n, undefined)
+    .unsetText(propId, languageId)  // Unset specific language
+    .unsetAll(propId)               // Unset all values for property
   )
   .deleteEntity(entityId)
   .restoreEntity(entityId)
@@ -133,6 +138,11 @@ const edit = new EditBuilder(editId)
     .relationType(relationTypeId)
   )
   .deleteRelation(relationId)
+  .restoreRelation(relationId)
+  .createValueRef(valueRefId, entityId, propId, {
+    type: "text",
+    value: "Referenceable value"
+  })
   .build();
 ```
 
@@ -244,17 +254,56 @@ If using native ES modules without a bundler, add an import map for the WASM dep
 
 ```typescript
 import {
-  randomId,           // Generate random UUIDv4
-  parseId,            // Parse hex string to Id
-  formatId,           // Format Id as hex string
-  derivedUuid,        // Derive UUIDv8 from bytes (SHA-256)
+  randomId,             // Generate random UUIDv4
+  parseId,              // Parse hex string to Id
+  formatId,             // Format Id as hex string
+  derivedUuid,          // Derive UUIDv8 from bytes (SHA-256, sync)
+  derivedUuidAsync,     // Derive UUIDv8 from bytes (SHA-256, async)
   derivedUuidFromString,
-  uniqueRelationId,   // Derive relation ID from endpoints
-  relationEntityId,   // Derive entity ID from relation ID
-  idsEqual,           // Compare two Ids
-  NIL_ID,             // Zero UUID
+  uniqueRelationId,     // Derive relation ID from endpoints
+  relationEntityId,     // Derive entity ID from relation ID
+  idsEqual,             // Compare two Ids for equality
+  compareIds,           // Compare two Ids for ordering (-1, 0, 1)
+  NIL_ID,               // Zero UUID
 } from "@geoprotocol/grc-20";
 ```
+
+### Validation
+
+Validate values and positions before encoding:
+
+```typescript
+import { validateValue, validatePosition } from "@geoprotocol/grc-20";
+
+// Validate a value matches its declared type
+const result = validateValue(value, DataType.Text);
+if (!result.valid) {
+  console.error(result.error);
+}
+
+// Validate position string format
+const posResult = validatePosition("a0");
+if (!posResult.valid) {
+  console.error(posResult.error);
+}
+```
+
+### Data Types Reference
+
+| Type | TypeScript Representation |
+|------|---------------------------|
+| `BOOL` | `{ type: "bool", value: boolean }` |
+| `INT64` | `{ type: "int64", value: bigint, unit?: Id }` |
+| `FLOAT64` | `{ type: "float64", value: number, unit?: Id }` |
+| `DECIMAL` | `{ type: "decimal", exponent: number, mantissa: bigint, unit?: Id }` |
+| `TEXT` | `{ type: "text", value: string, language?: Id }` |
+| `BYTES` | `{ type: "bytes", value: Uint8Array }` |
+| `DATE` | `{ type: "date", value: string }` (ISO 8601) |
+| `TIME` | `{ type: "time", value: string }` (HH:MM:SS) |
+| `DATETIME` | `{ type: "datetime", value: string }` (ISO 8601) |
+| `SCHEDULE` | `{ type: "schedule", value: string }` (cron-like) |
+| `POINT` | `{ type: "point", lat: number, lon: number }` |
+| `EMBEDDING` | `{ type: "embedding", subType: EmbeddingSubType.Float32 \| EmbeddingSubType.Int8 \| EmbeddingSubType.Binary, data: number[] }` |
 
 ### Genesis IDs
 

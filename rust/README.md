@@ -61,34 +61,121 @@ assert_eq!(edit.id, decoded.id);
 
 ### Data Types
 
-All 11 GRC-20 data types are supported:
+All 12 GRC-20 data types are supported:
 
 | Type | Rust Representation |
 |------|---------------------|
 | BOOL | `Value::Bool(bool)` |
-| INT64 | `Value::Int64(i64)` |
-| FLOAT64 | `Value::Float64(f64)` |
-| DECIMAL | `Value::Decimal { exponent, mantissa }` |
+| INT64 | `Value::Int64 { value, unit }` |
+| FLOAT64 | `Value::Float64 { value, unit }` |
+| DECIMAL | `Value::Decimal { exponent, mantissa, unit }` |
 | TEXT | `Value::Text { value, language }` |
 | BYTES | `Value::Bytes(Vec<u8>)` |
-| TIMESTAMP | `Value::Timestamp(i64)` (microseconds) |
 | DATE | `Value::Date(String)` (ISO 8601) |
+| TIME | `Value::Time(String)` (HH:MM:SS with optional timezone) |
+| DATETIME | `Value::DateTime(String)` (ISO 8601 with timezone) |
+| SCHEDULE | `Value::Schedule(String)` (cron-like recurring) |
 | POINT | `Value::Point { lat, lon }` |
 | EMBEDDING | `Value::Embedding { sub_type, dims, data }` |
-| REF | `Value::Ref(Id)` |
 
 ### Operations
 
-All 8 operation types:
+All 9 operation types:
 
-- `CreateEntity` — Create or upsert an entity
+- `CreateEntity` — Create or upsert an entity with values
 - `UpdateEntity` — Modify entity values (set/unset)
 - `DeleteEntity` — Tombstone an entity
 - `RestoreEntity` — Restore a deleted entity
-- `CreateRelation` — Create a directed relation
-- `UpdateRelation` — Update relation's mutable fields
+- `CreateRelation` — Create a directed relation with optional position and space/version pins
+- `UpdateRelation` — Update relation's mutable fields (position)
 - `DeleteRelation` — Tombstone a relation
 - `RestoreRelation` — Restore a deleted relation
+- `CreateValueRef` — Create a referenceable value for use as relation endpoints
+
+### Builder API
+
+Fluent builders for constructing edits:
+
+```rust
+use grc_20::{EditBuilder, genesis::{properties, languages}};
+
+let edit = EditBuilder::new(edit_id)
+    .name("My Edit")
+    .author(author_id)
+    .create_entity(entity_id, |e| e
+        .text(properties::name(), "Hello", None)
+        .int64(count_prop, 42, None)
+        .float64(temp_prop, 98.6, Some(fahrenheit_unit))
+        .point(location_prop, 40.7128, -74.006)
+        .date(birth_prop, "1990-05-15")
+        .time(start_prop, "09:00:00")
+        .datetime(created_prop, "2024-01-15T10:30:00Z")
+    )
+    .update_entity(entity_id, |u| u
+        .set_text(properties::name(), "Updated", None)
+        .unset_all(old_prop)
+    )
+    .create_relation(|r| r
+        .id(relation_id)
+        .from(from_id)
+        .to(to_id)
+        .relation_type(relation_type_id)
+        .position("a0")
+    )
+    .update_relation(relation_id, |r| r
+        .position("b0")
+    )
+    .build();
+```
+
+### Language-Aware Text
+
+Multi-language support for TEXT values:
+
+```rust
+use grc_20::genesis::languages;
+
+// Set text with language variants
+let edit = EditBuilder::new(edit_id)
+    .create_entity(entity_id, |e| e
+        .text(name_prop, "Hello", Some(languages::english()))
+        .text(name_prop, "Hola", Some(languages::spanish()))
+        .text(name_prop, "Bonjour", Some(languages::french()))
+    )
+    .update_entity(entity_id, |u| u
+        // Unset specific language variant
+        .unset_text(name_prop, Some(languages::french()))
+    )
+    .build();
+```
+
+### Canonical Encoding
+
+Deterministic encoding for content addressing:
+
+```rust
+use grc_20::{encode_edit, EncodeOptions};
+
+// Canonical mode ensures identical edits produce identical bytes
+let bytes = encode_edit(&edit, EncodeOptions::canonical())?;
+
+// Use for content hashing, signatures, deduplication
+let hash = sha256(&bytes);
+```
+
+### Zero-Copy Decoding
+
+Performance optimization with borrowed data:
+
+```rust
+use grc_20::decode_edit_borrowed;
+
+// Decode with zero-copy string borrowing
+let edit = decode_edit_borrowed(&bytes)?;
+
+// Strings borrow from input buffer - no allocation
+assert!(matches!(edit.name, Cow::Borrowed(_)));
+```
 
 ### Compression
 
@@ -161,7 +248,7 @@ The decoder automatically detects and handles both formats.
 
 ## Spec Compliance
 
-Implements GRC-20 v2 specification version 0.17.0.
+Implements GRC-20 v2 specification version 0.19.0.
 
 ## License
 
