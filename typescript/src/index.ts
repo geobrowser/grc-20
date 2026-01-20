@@ -12,6 +12,9 @@ export * from "./types/index.js";
 // Builders
 export * from "./builder/index.js";
 
+// Ops (functional API)
+export * from "./ops/index.js";
+
 // Utilities
 export * from "./util/index.js";
 
