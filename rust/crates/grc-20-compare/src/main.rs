@@ -7,7 +7,7 @@ use std::fs;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use grc_20::{DataType, EditBuilder, EntityBuilder, Id, derived_uuid};
+use grc_20::{EditBuilder, EntityBuilder, Id, derived_uuid};
 
 /// Creates a deterministic relation ID from from+to+type (to maintain same behavior as removed unique mode).
 fn make_relation_id(from: Id, to: Id, rel_type: Id) -> Id {
@@ -242,16 +242,6 @@ fn benchmark_grc20(cities: &[City], iterations: u32) -> BenchResult {
         .name("Cities Import")
         .author(author_id)
         .created_at(1704067200_000_000);
-
-    builder = builder
-        .create_property(props::NAME, DataType::Text)
-        .create_property(props::CODE, DataType::Text)
-        .create_property(props::NATIVE_NAME, DataType::Text)
-        .create_property(props::POPULATION, DataType::Int64)
-        .create_property(props::LOCATION, DataType::Point)
-        .create_property(props::TIMEZONE, DataType::Text)
-        .create_property(props::WIKIDATA_ID, DataType::Text)
-        .create_property(props::CITY_TYPE, DataType::Text);
 
     builder = builder
         .create_entity(types::CITY, |e| e.text(props::NAME, "City", None))
