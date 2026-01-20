@@ -122,8 +122,6 @@ const edit = new EditBuilder(editId)
     .date(propId, "2024-01-15")
     .time(propId, "10:30:00")
     .datetime(propId, "2024-01-15T10:30:00Z")
-    .schedule(propId, "0 9 * * MON-FRI")
-    .embedding(propId, "f32", [0.1, 0.2, 0.3])
   )
   .updateEntity(entityId, u => u
     .setText(propId, "new value", undefined)
@@ -138,13 +136,6 @@ const edit = new EditBuilder(editId)
     .from(fromId)
     .to(toId)
     .relationType(relationTypeId)
-    .position("a0")                 // Lexicographic ordering
-    .spacePin(spaceId, version)     // Pin to space version
-    .fromVersionPin(fromVersion)    // Pin from endpoint
-    .toVersionPin(toVersion)        // Pin to endpoint
-  )
-  .updateRelation(relationId, r => r
-    .position("b0")                 // Update position
   )
   .deleteRelation(relationId)
   .restoreRelation(relationId)
@@ -195,30 +186,6 @@ const edit = createEdit({
 });
 ```
 
-#### Value References
-
-Value refs create referenceable values that can be used as relation endpoints:
-
-```typescript
-import { createValueRef, createRelation } from "@geoprotocol/grc-20";
-
-// Create a value ref
-const valueRefOp = createValueRef({
-  id: valueRefId,
-  entity: entityId,
-  property: propId,
-  value: { type: "text", value: "Statement to be annotated" },
-});
-
-// Create a relation targeting the value ref
-const annotationOp = createRelation({
-  id: randomId(),
-  relationType: annotationTypeId,
-  from: annotatorId,
-  toValueRef: valueRefId,  // Target value ref instead of entity
-});
-```
-
 ### Codec
 
 ```typescript
@@ -230,20 +197,6 @@ const bytesCanonical = encodeEdit(edit, { canonical: true });
 
 // Decode (uncompressed)
 const edit = decodeEdit(bytes);
-```
-
-#### Canonical Encoding
-
-Canonical mode ensures identical edits produce identical bytes, regardless of construction order. This is essential for:
-
-- **Content addressing** — Derive deterministic IDs from edit content
-- **Deduplication** — Detect duplicate edits by comparing hashes
-- **Signatures** — Sign edits with reproducible byte representation
-
-```typescript
-// Canonical encoding sorts dictionary entries and normalizes output
-const canonical = encodeEdit(edit, { canonical: true });
-const hash = await crypto.subtle.digest("SHA-256", canonical);
 ```
 
 ### Compression
@@ -350,7 +303,7 @@ if (!posResult.valid) {
 | `DATETIME` | `{ type: "datetime", value: string }` (ISO 8601) |
 | `SCHEDULE` | `{ type: "schedule", value: string }` (cron-like) |
 | `POINT` | `{ type: "point", lat: number, lon: number }` |
-| `EMBEDDING` | `{ type: "embedding", subType: "f32"\|"f64"\|"i8", data: number[] }` |
+| `EMBEDDING` | `{ type: "embedding", subType: EmbeddingSubType.Float32 \| EmbeddingSubType.Int8 \| EmbeddingSubType.Binary, data: number[] }` |
 
 ### Genesis IDs
 

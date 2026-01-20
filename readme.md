@@ -122,15 +122,6 @@ e.text(nameProp, "Hola", languages.spanish())
 u.unsetText(nameProp, languages.english())
 ```
 
-### Unit Support
-
-Numeric types (INT64, FLOAT64, DECIMAL) support units:
-
-```typescript
-e.int64(tempProp, 25n, units.celsius())
-e.float64(speedProp, 60.5, units.milesPerHour())
-```
-
 ### Relation Features
 
 Relations support advanced features for knowledge graphs:
