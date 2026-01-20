@@ -8,7 +8,7 @@ use std::path::Path;
 use std::time::Instant;
 
 use grc_20::{
-    DataType, EditBuilder, EncodeOptions, EntityBuilder, Id, Op, derived_uuid,
+    EditBuilder, EncodeOptions, EntityBuilder, Id, Op, derived_uuid,
 };
 
 /// Creates a deterministic relation ID from from+to+type (to maintain same behavior as removed unique mode).
@@ -235,17 +235,6 @@ fn convert_cities_to_edit<'a>(cities: &'a [City]) -> grc_20::Edit<'a> {
         .author(author_id)
         .created_at(1704067200_000_000);
 
-    // Create schema: properties
-    builder = builder
-        .create_property(props::NAME, DataType::Text)
-        .create_property(props::CODE, DataType::Text)
-        .create_property(props::NATIVE_NAME, DataType::Text)
-        .create_property(props::POPULATION, DataType::Int64)
-        .create_property(props::LOCATION, DataType::Point)
-        .create_property(props::TIMEZONE, DataType::Text)
-        .create_property(props::WIKIDATA_ID, DataType::Text)
-        .create_property(props::CITY_TYPE, DataType::Text);
-
     // Create type entities
     builder = builder
         .create_entity(types::CITY, |e| e.text(props::NAME, "City", None))
@@ -350,7 +339,6 @@ fn main() {
     // Count statistics
     let mut entity_count = 0;
     let mut relation_count = 0;
-    let mut property_count = 0;
     let mut total_values = 0;
     for op in &edit.ops {
         match op {
@@ -359,7 +347,6 @@ fn main() {
                 total_values += e.values.len();
             }
             Op::CreateRelation(_) => relation_count += 1,
-            Op::CreateProperty(_) => property_count += 1,
             _ => {}
         }
     }
@@ -370,8 +357,8 @@ fn main() {
         convert_time
     );
     println!(
-        "  - {} entities, {} relations, {} properties, {} total values",
-        entity_count, relation_count, property_count, total_values
+        "  - {} entities, {} relations, {} total values",
+        entity_count, relation_count, total_values
     );
 
     // Benchmark encoding (uncompressed, fast mode)
