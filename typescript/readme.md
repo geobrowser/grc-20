@@ -100,6 +100,7 @@ import {
   EntityBuilder,        // Build entity values
   UpdateEntityBuilder,  // Build update operations
   RelationBuilder,      // Build relation operations
+  UpdateRelationBuilder,// Build relation update operations
 } from "@geoprotocol/grc-20";
 ```
 
@@ -114,15 +115,21 @@ const edit = new EditBuilder(editId)
     .text(propId, "value", languageId)
     .int64(propId, 42n, unitId)
     .float64(propId, 3.14, undefined)
+    .decimal(propId, { exponent: -2, mantissa: 1234n }, undefined)
     .bool(propId, true)
     .bytes(propId, new Uint8Array([1, 2, 3]))
     .point(propId, 40.7128, -74.006)
     .date(propId, "2024-01-15")
+    .time(propId, "10:30:00")
     .datetime(propId, "2024-01-15T10:30:00Z")
+    .schedule(propId, "0 9 * * MON-FRI")
+    .embedding(propId, "f32", [0.1, 0.2, 0.3])
   )
   .updateEntity(entityId, u => u
     .setText(propId, "new value", undefined)
-    .unsetAll(propId)
+    .setInt64(propId, 100n, undefined)
+    .unsetText(propId, languageId)  // Unset specific language
+    .unsetAll(propId)               // Unset all values for property
   )
   .deleteEntity(entityId)
   .restoreEntity(entityId)
@@ -131,8 +138,20 @@ const edit = new EditBuilder(editId)
     .from(fromId)
     .to(toId)
     .relationType(relationTypeId)
+    .position("a0")                 // Lexicographic ordering
+    .spacePin(spaceId, version)     // Pin to space version
+    .fromVersionPin(fromVersion)    // Pin from endpoint
+    .toVersionPin(toVersion)        // Pin to endpoint
+  )
+  .updateRelation(relationId, r => r
+    .position("b0")                 // Update position
   )
   .deleteRelation(relationId)
+  .restoreRelation(relationId)
+  .createValueRef(valueRefId, entityId, propId, {
+    type: "text",
+    value: "Referenceable value"
+  })
   .build();
 ```
 
@@ -176,6 +195,30 @@ const edit = createEdit({
 });
 ```
 
+#### Value References
+
+Value refs create referenceable values that can be used as relation endpoints:
+
+```typescript
+import { createValueRef, createRelation } from "@geoprotocol/grc-20";
+
+// Create a value ref
+const valueRefOp = createValueRef({
+  id: valueRefId,
+  entity: entityId,
+  property: propId,
+  value: { type: "text", value: "Statement to be annotated" },
+});
+
+// Create a relation targeting the value ref
+const annotationOp = createRelation({
+  id: randomId(),
+  relationType: annotationTypeId,
+  from: annotatorId,
+  toValueRef: valueRefId,  // Target value ref instead of entity
+});
+```
+
 ### Codec
 
 ```typescript
@@ -187,6 +230,20 @@ const bytesCanonical = encodeEdit(edit, { canonical: true });
 
 // Decode (uncompressed)
 const edit = decodeEdit(bytes);
+```
+
+#### Canonical Encoding
+
+Canonical mode ensures identical edits produce identical bytes, regardless of construction order. This is essential for:
+
+- **Content addressing** — Derive deterministic IDs from edit content
+- **Deduplication** — Detect duplicate edits by comparing hashes
+- **Signatures** — Sign edits with reproducible byte representation
+
+```typescript
+// Canonical encoding sorts dictionary entries and normalizes output
+const canonical = encodeEdit(edit, { canonical: true });
+const hash = await crypto.subtle.digest("SHA-256", canonical);
 ```
 
 ### Compression
@@ -244,17 +301,56 @@ If using native ES modules without a bundler, add an import map for the WASM dep
 
 ```typescript
 import {
-  randomId,           // Generate random UUIDv4
-  parseId,            // Parse hex string to Id
-  formatId,           // Format Id as hex string
-  derivedUuid,        // Derive UUIDv8 from bytes (SHA-256)
+  randomId,             // Generate random UUIDv4
+  parseId,              // Parse hex string to Id
+  formatId,             // Format Id as hex string
+  derivedUuid,          // Derive UUIDv8 from bytes (SHA-256, sync)
+  derivedUuidAsync,     // Derive UUIDv8 from bytes (SHA-256, async)
   derivedUuidFromString,
-  uniqueRelationId,   // Derive relation ID from endpoints
-  relationEntityId,   // Derive entity ID from relation ID
-  idsEqual,           // Compare two Ids
-  NIL_ID,             // Zero UUID
+  uniqueRelationId,     // Derive relation ID from endpoints
+  relationEntityId,     // Derive entity ID from relation ID
+  idsEqual,             // Compare two Ids for equality
+  compareIds,           // Compare two Ids for ordering (-1, 0, 1)
+  NIL_ID,               // Zero UUID
 } from "@geoprotocol/grc-20";
 ```
+
+### Validation
+
+Validate values and positions before encoding:
+
+```typescript
+import { validateValue, validatePosition } from "@geoprotocol/grc-20";
+
+// Validate a value matches its declared type
+const result = validateValue(value, DataType.Text);
+if (!result.valid) {
+  console.error(result.error);
+}
+
+// Validate position string format
+const posResult = validatePosition("a0");
+if (!posResult.valid) {
+  console.error(posResult.error);
+}
+```
+
+### Data Types Reference
+
+| Type | TypeScript Representation |
+|------|---------------------------|
+| `BOOL` | `{ type: "bool", value: boolean }` |
+| `INT64` | `{ type: "int64", value: bigint, unit?: Id }` |
+| `FLOAT64` | `{ type: "float64", value: number, unit?: Id }` |
+| `DECIMAL` | `{ type: "decimal", exponent: number, mantissa: bigint, unit?: Id }` |
+| `TEXT` | `{ type: "text", value: string, language?: Id }` |
+| `BYTES` | `{ type: "bytes", value: Uint8Array }` |
+| `DATE` | `{ type: "date", value: string }` (ISO 8601) |
+| `TIME` | `{ type: "time", value: string }` (HH:MM:SS) |
+| `DATETIME` | `{ type: "datetime", value: string }` (ISO 8601) |
+| `SCHEDULE` | `{ type: "schedule", value: string }` (cron-like) |
+| `POINT` | `{ type: "point", lat: number, lon: number }` |
+| `EMBEDDING` | `{ type: "embedding", subType: "f32"\|"f64"\|"i8", data: number[] }` |
 
 ### Genesis IDs
 
