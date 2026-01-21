@@ -14,7 +14,7 @@ use crate::limits::{
     FORMAT_VERSION, MAGIC_COMPRESSED, MAGIC_UNCOMPRESSED, MAX_AUTHORS, MAX_DICT_SIZE,
     MAX_EDIT_SIZE, MAX_OPS_PER_EDIT, MAX_STRING_LEN, MIN_FORMAT_VERSION,
 };
-use crate::model::{DataType, DictionaryBuilder, Edit, Id, Op, WireDictionaries};
+use crate::model::{Context, ContextEdge, DataType, DictionaryBuilder, Edit, Id, Op, WireDictionaries};
 
 // =============================================================================
 // DECODING
@@ -137,14 +137,30 @@ fn decode_edit_borrowed(input: &[u8]) -> Result<Edit<'_>, DecodeError> {
     let languages = read_id_vec_no_duplicates(&mut reader, MAX_DICT_SIZE, "languages")?;
     let units = read_id_vec_no_duplicates(&mut reader, MAX_DICT_SIZE, "units")?;
     let objects = read_id_vec_no_duplicates(&mut reader, MAX_DICT_SIZE, "objects")?;
+    let context_ids = read_id_vec_no_duplicates(&mut reader, MAX_DICT_SIZE, "context_ids")?;
 
-    let dicts = WireDictionaries {
+    let mut dicts = WireDictionaries {
         properties,
         relation_types,
         languages,
         units,
         objects,
+        context_ids,
+        contexts: Vec::new(),
     };
+
+    // Contexts - decode and store in dicts for op decoding to resolve
+    let context_count = reader.read_varint("context_count")? as usize;
+    if context_count > MAX_DICT_SIZE {
+        return Err(DecodeError::LengthExceedsLimit {
+            field: "contexts",
+            len: context_count,
+            max: MAX_DICT_SIZE,
+        });
+    }
+    for _ in 0..context_count {
+        dicts.contexts.push(decode_context(&mut reader, &dicts)?);
+    }
 
     // Operations
     let op_count = reader.read_varint("op_count")? as usize;
@@ -215,14 +231,30 @@ fn decode_edit_owned(data: &[u8]) -> Result<Edit<'static>, DecodeError> {
     let languages = read_id_vec_no_duplicates(&mut reader, MAX_DICT_SIZE, "languages")?;
     let units = read_id_vec_no_duplicates(&mut reader, MAX_DICT_SIZE, "units")?;
     let objects = read_id_vec_no_duplicates(&mut reader, MAX_DICT_SIZE, "objects")?;
+    let context_ids = read_id_vec_no_duplicates(&mut reader, MAX_DICT_SIZE, "context_ids")?;
 
-    let dicts = WireDictionaries {
+    let mut dicts = WireDictionaries {
         properties,
         relation_types,
         languages,
         units,
         objects,
+        context_ids,
+        contexts: Vec::new(),
     };
+
+    // Contexts - decode and store in dicts for op decoding to resolve
+    let context_count = reader.read_varint("context_count")? as usize;
+    if context_count > MAX_DICT_SIZE {
+        return Err(DecodeError::LengthExceedsLimit {
+            field: "contexts",
+            len: context_count,
+            max: MAX_DICT_SIZE,
+        });
+    }
+    for _ in 0..context_count {
+        dicts.contexts.push(decode_context(&mut reader, &dicts)?);
+    }
 
     // Operations - use allocating decode
     let op_count = reader.read_varint("op_count")? as usize;
@@ -255,17 +287,68 @@ fn decode_op_owned(reader: &mut Reader<'_>, dicts: &WireDictionaries) -> Result<
     Ok(op_to_owned(op))
 }
 
+/// Decodes a Context from the reader.
+fn decode_context(reader: &mut Reader<'_>, dicts: &WireDictionaries) -> Result<Context, DecodeError> {
+    let root_id_index = reader.read_varint("root_id")? as usize;
+    if root_id_index >= dicts.context_ids.len() {
+        return Err(DecodeError::IndexOutOfBounds {
+            dict: "context_ids",
+            index: root_id_index,
+            size: dicts.context_ids.len(),
+        });
+    }
+    let root_id = dicts.context_ids[root_id_index];
+
+    let edge_count = reader.read_varint("edge_count")? as usize;
+    if edge_count > MAX_DICT_SIZE {
+        return Err(DecodeError::LengthExceedsLimit {
+            field: "context_edges",
+            len: edge_count,
+            max: MAX_DICT_SIZE,
+        });
+    }
+
+    let mut edges = Vec::with_capacity(edge_count);
+    for _ in 0..edge_count {
+        let type_id_index = reader.read_varint("edge_type_id")? as usize;
+        if type_id_index >= dicts.relation_types.len() {
+            return Err(DecodeError::IndexOutOfBounds {
+                dict: "relation_types",
+                index: type_id_index,
+                size: dicts.relation_types.len(),
+            });
+        }
+        let type_id = dicts.relation_types[type_id_index];
+
+        let to_entity_id_index = reader.read_varint("edge_to_entity_id")? as usize;
+        if to_entity_id_index >= dicts.context_ids.len() {
+            return Err(DecodeError::IndexOutOfBounds {
+                dict: "context_ids",
+                index: to_entity_id_index,
+                size: dicts.context_ids.len(),
+            });
+        }
+        let to_entity_id = dicts.context_ids[to_entity_id_index];
+
+        edges.push(ContextEdge { type_id, to_entity_id });
+    }
+
+    Ok(Context { root_id, edges })
+}
+
 /// Converts an Op with borrowed data to owned data.
 fn op_to_owned(op: Op<'_>) -> Op<'static> {
     match op {
         Op::CreateEntity(ce) => Op::CreateEntity(crate::model::CreateEntity {
             id: ce.id,
             values: ce.values.into_iter().map(pv_to_owned).collect(),
+            context: ce.context,
         }),
         Op::UpdateEntity(ue) => Op::UpdateEntity(crate::model::UpdateEntity {
             id: ue.id,
             set_properties: ue.set_properties.into_iter().map(pv_to_owned).collect(),
             unset_values: ue.unset_values,
+            context: ue.context,
         }),
         Op::DeleteEntity(de) => Op::DeleteEntity(de),
         Op::RestoreEntity(re) => Op::RestoreEntity(re),
@@ -282,6 +365,7 @@ fn op_to_owned(op: Op<'_>) -> Op<'static> {
             from_version: cr.from_version,
             to_space: cr.to_space,
             to_version: cr.to_version,
+            context: cr.context,
         }),
         Op::UpdateRelation(ur) => Op::UpdateRelation(crate::model::UpdateRelation {
             id: ur.id,
@@ -291,6 +375,7 @@ fn op_to_owned(op: Op<'_>) -> Op<'static> {
             to_version: ur.to_version,
             position: ur.position.map(|p| Cow::Owned(p.into_owned())),
             unset: ur.unset,
+            context: ur.context,
         }),
         Op::DeleteRelation(dr) => Op::DeleteRelation(dr),
         Op::RestoreRelation(rr) => Op::RestoreRelation(rr),
@@ -458,15 +543,17 @@ fn encode_edit_fast(edit: &Edit) -> Result<Vec<u8>, EncodeError> {
     // Property types are determined from values themselves (per-edit typing)
     let property_types = rustc_hash::FxHashMap::default();
 
-    // Single pass: encode ops while building dictionaries
+    // Create dictionary builder - contexts will be collected from ops
     let mut dict_builder = DictionaryBuilder::with_capacity(edit.ops.len());
+
+    // Single pass: encode ops while building dictionaries (including contexts)
     let mut ops_writer = Writer::with_capacity(edit.ops.len() * 50);
 
     for op in &edit.ops {
         encode_op(&mut ops_writer, op, &mut dict_builder, &property_types)?;
     }
 
-    // Now assemble final output: header + dictionaries + ops
+    // Now assemble final output: header + dictionaries + contexts + ops
     let ops_bytes = ops_writer.into_bytes();
     let mut writer = Writer::with_capacity(256 + ops_bytes.len());
 
@@ -482,6 +569,9 @@ fn encode_edit_fast(edit: &Edit) -> Result<Vec<u8>, EncodeError> {
 
     // Dictionaries
     dict_builder.write_dictionaries(&mut writer);
+
+    // Contexts (collected from ops during encoding)
+    dict_builder.write_contexts(&mut writer);
 
     // Operations (already encoded)
     writer.write_varint(edit.ops.len() as u64);
@@ -504,8 +594,10 @@ fn encode_edit_canonical(edit: &Edit) -> Result<Vec<u8>, EncodeError> {
     // Property types are determined from values themselves (per-edit typing)
     let property_types = rustc_hash::FxHashMap::default();
 
-    // Pass 1: Collect all dictionary entries by doing a dry run
+    // Create dictionary builder - contexts will be collected from ops
     let mut dict_builder = DictionaryBuilder::with_capacity(edit.ops.len());
+
+    // Pass 1: Collect all dictionary entries (including contexts) by doing a dry run
     let mut temp_writer = Writer::with_capacity(edit.ops.len() * 50);
     for op in &edit.ops {
         encode_op(&mut temp_writer, op, &mut dict_builder, &property_types)?;
@@ -531,7 +623,7 @@ fn encode_edit_canonical(edit: &Edit) -> Result<Vec<u8>, EncodeError> {
         encode_op_canonical(&mut ops_writer, op, &mut canonical_builder, &property_types)?;
     }
 
-    // Assemble final output: header + dictionaries + ops
+    // Assemble final output: header + dictionaries + contexts + ops
     let ops_bytes = ops_writer.into_bytes();
     let mut writer = Writer::with_capacity(256 + ops_bytes.len());
 
@@ -547,6 +639,9 @@ fn encode_edit_canonical(edit: &Edit) -> Result<Vec<u8>, EncodeError> {
 
     // Dictionaries (sorted)
     sorted_builder.write_dictionaries(&mut writer);
+
+    // Contexts (collected from ops during pass 1, sorted)
+    sorted_builder.write_contexts(&mut writer);
 
     // Operations
     writer.write_varint(edit.ops.len() as u64);
@@ -577,6 +672,12 @@ fn encode_op_canonical(
                     .unwrap_or_else(|| pv.value.data_type());
                 encode_property_value_canonical(writer, pv, dict_builder, data_type)?;
             }
+            // Write context_ref: 0xFFFFFFFF = no context, else index into contexts[]
+            let context_ref = match &ce.context {
+                Some(ctx) => dict_builder.add_context(ctx) as u32,
+                None => 0xFFFFFFFF,
+            };
+            writer.write_varint(context_ref as u64);
             Ok(())
         }
         Op::UpdateEntity(ue) => {
@@ -623,6 +724,12 @@ fn encode_op_canonical(
                     writer.write_varint(lang_value as u64);
                 }
             }
+            // Write context_ref: 0xFFFFFFFF = no context, else index into contexts[]
+            let context_ref = match &ue.context {
+                Some(ctx) => dict_builder.add_context(ctx) as u32,
+                None => 0xFFFFFFFF,
+            };
+            writer.write_varint(context_ref as u64);
             Ok(())
         }
         // Other ops don't have values to sort, delegate to regular encode
@@ -754,8 +861,10 @@ pub fn encode_edit_profiled(edit: &Edit, profile: bool) -> Result<Vec<u8>, Encod
     let property_types = rustc_hash::FxHashMap::default();
     let t1 = Instant::now();
 
-    // Single pass: encode ops while building dictionaries
+    // Create dictionary builder - contexts will be collected from ops
     let mut dict_builder = DictionaryBuilder::with_capacity(edit.ops.len());
+
+    // Single pass: encode ops while building dictionaries (including contexts)
     let mut ops_writer = Writer::with_capacity(edit.ops.len() * 50);
 
     for op in &edit.ops {
@@ -774,6 +883,7 @@ pub fn encode_edit_profiled(edit: &Edit, profile: bool) -> Result<Vec<u8>, Encod
     writer.write_id_vec(&edit.authors);
     writer.write_signed_varint(edit.created_at);
     dict_builder.write_dictionaries(&mut writer);
+    dict_builder.write_contexts(&mut writer);
     writer.write_varint(edit.ops.len() as u64);
     writer.write_bytes(&ops_bytes);
     let t3 = Instant::now();
@@ -825,7 +935,7 @@ mod tests {
             name: Cow::Owned("Test Edit".to_string()),
             authors: vec![[2u8; 16]],
             created_at: 1234567890,
-            ops: vec![
+                        ops: vec![
                 Op::CreateEntity(CreateEntity {
                     id: [3u8; 16],
                     values: vec![PropertyValue {
@@ -835,6 +945,7 @@ mod tests {
                             language: None,
                         },
                     }],
+                    context: None,
                 }),
             ],
         }
@@ -905,7 +1016,7 @@ mod tests {
             name: Cow::Borrowed(""),
             authors: vec![],
             created_at: 0,
-            ops: vec![],
+                        ops: vec![],
         };
 
         let encoded = encode_edit(&edit).unwrap();
@@ -931,7 +1042,7 @@ mod tests {
             name: Cow::Owned("Test".to_string()),
             authors: vec![],
             created_at: 0,
-            ops: vec![
+                        ops: vec![
                 Op::CreateEntity(CreateEntity {
                     id: [3u8; 16],
                     values: vec![
@@ -947,6 +1058,7 @@ mod tests {
                             value: Value::Int64 { value: 42, unit: None },
                         },
                     ],
+                    context: None,
                 }),
             ],
         };
@@ -957,7 +1069,7 @@ mod tests {
             name: Cow::Owned("Test".to_string()),
             authors: vec![],
             created_at: 0,
-            ops: vec![
+                        ops: vec![
                 Op::CreateEntity(CreateEntity {
                     id: [3u8; 16],
                     values: vec![
@@ -974,6 +1086,7 @@ mod tests {
                             },
                         },
                     ],
+                    context: None,
                 }),
             ],
         };
@@ -1042,7 +1155,7 @@ mod tests {
             name: Cow::Owned("Test".to_string()),
             authors: vec![author1, author1], // Duplicate!
             created_at: 0,
-            ops: vec![],
+                        ops: vec![],
         };
 
         // Fast mode doesn't check duplicates
@@ -1063,7 +1176,7 @@ mod tests {
             name: Cow::Owned("Test".to_string()),
             authors: vec![],
             created_at: 0,
-            ops: vec![
+                        ops: vec![
                 Op::CreateEntity(CreateEntity {
                     id: [1u8; 16],
                     values: vec![
@@ -1082,6 +1195,7 @@ mod tests {
                             },
                         },
                     ],
+                    context: None,
                 }),
             ],
         };
@@ -1102,7 +1216,7 @@ mod tests {
             name: Cow::Owned("Test".to_string()),
             authors: vec![],
             created_at: 0,
-            ops: vec![
+                        ops: vec![
                 Op::CreateEntity(CreateEntity {
                     id: [1u8; 16],
                     values: vec![
@@ -1121,6 +1235,7 @@ mod tests {
                             },
                         },
                     ],
+                    context: None,
                 }),
             ],
         };
@@ -1141,7 +1256,7 @@ mod tests {
             name: Cow::Owned("Test".to_string()),
             authors: vec![],
             created_at: 0,
-            ops: vec![
+                        ops: vec![
                 Op::CreateEntity(CreateEntity {
                     id: [3u8; 16],
                     values: vec![
@@ -1157,6 +1272,7 @@ mod tests {
                             },
                         },
                     ],
+                    context: None,
                 }),
             ],
         };

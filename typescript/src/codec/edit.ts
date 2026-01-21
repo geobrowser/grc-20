@@ -1,5 +1,5 @@
 import { compareIds, type Id } from "../types/id.js";
-import type { Edit, WireDictionaries } from "../types/edit.js";
+import type { Context, ContextEdge, Edit, WireDictionaries } from "../types/edit.js";
 import type { Op, UnsetLanguage } from "../types/op.js";
 import { DataType, valueDataType, type PropertyValue } from "../types/value.js";
 import { DecodeError, Reader, Writer } from "./primitives.js";
@@ -26,7 +26,7 @@ export interface EncodeOptions {
 export function encodeEdit(edit: Edit, options?: EncodeOptions): Uint8Array {
   const canonical = options?.canonical ?? false;
 
-  // Build dictionaries by scanning all ops
+  // Build dictionaries by scanning all ops (contexts are collected from ops)
   let dicts = buildDictionaries(edit.ops);
 
   // Sort dictionaries for canonical encoding
@@ -34,8 +34,16 @@ export function encodeEdit(edit: Edit, options?: EncodeOptions): Uint8Array {
     dicts = sortDictionaries(dicts);
   }
 
-  // Create dictionary indices
-  const indices = createDictionaryIndices(dicts);
+  // Create dictionary indices (with context collection support)
+  const { indices, getContexts } = createDictionaryIndices(dicts);
+
+  // First pass: encode ops to collect contexts
+  const opsWriter = new Writer(edit.ops.length * 50);
+  for (const op of edit.ops) {
+    encodeOp(opsWriter, op, indices);
+  }
+  const opsBytes = opsWriter.finish();
+  const contexts = getContexts();
 
   // Write to buffer
   const writer = new Writer(1024);
@@ -59,11 +67,12 @@ export function encodeEdit(edit: Edit, options?: EncodeOptions): Uint8Array {
   // Dictionaries
   writeDictionaries(writer, dicts);
 
-  // Operations
+  // Contexts (collected from ops during encoding)
+  writeContexts(writer, contexts, indices);
+
+  // Operations (already encoded)
   writer.writeVarintNumber(edit.ops.length);
-  for (const op of edit.ops) {
-    encodeOp(writer, op, indices);
-  }
+  writer.writeBytes(opsBytes);
 
   return writer.finish();
 }
@@ -102,6 +111,10 @@ export function decodeEdit(data: Uint8Array): Edit {
 
   // Dictionaries
   const dicts = readDictionaries(reader);
+
+  // Contexts - read and store in dicts for op decoding
+  const contexts = readContexts(reader, dicts);
+  dicts.contexts = contexts;
   const lookups = createDictionaryLookups(dicts);
 
   // Operations
@@ -130,6 +143,7 @@ interface DictionaryBuilder {
   languages: Map<string, Id>;
   units: Map<string, Id>;
   objects: Map<string, Id>;
+  contextIds: Map<string, Id>;
 }
 
 function idKey(id: Id): string {
@@ -143,7 +157,10 @@ function buildDictionaries(ops: Op[]): DictionaryBuilder {
     languages: new Map(),
     units: new Map(),
     objects: new Map(),
+    contextIds: new Map(),
   };
+
+  // Note: contextIds are populated during encoding when addContext is called
 
   function addProperty(id: Id, dataType: DataType): void {
     const key = idKey(id);
@@ -251,6 +268,7 @@ function sortDictionaries(dicts: DictionaryBuilder): DictionaryBuilder {
   const sortedLangs = Array.from(dicts.languages.values()).sort(compareIds);
   const sortedUnits = Array.from(dicts.units.values()).sort(compareIds);
   const sortedObjects = Array.from(dicts.objects.values()).sort(compareIds);
+  const sortedContextIds = Array.from(dicts.contextIds.values()).sort(compareIds);
 
   const sorted: DictionaryBuilder = {
     properties: new Map(),
@@ -258,6 +276,7 @@ function sortDictionaries(dicts: DictionaryBuilder): DictionaryBuilder {
     languages: new Map(),
     units: new Map(),
     objects: new Map(),
+    contextIds: new Map(),
   };
 
   for (const prop of sortedProps) {
@@ -275,17 +294,31 @@ function sortDictionaries(dicts: DictionaryBuilder): DictionaryBuilder {
   for (const id of sortedObjects) {
     sorted.objects.set(idKey(id), id);
   }
+  for (const id of sortedContextIds) {
+    sorted.contextIds.set(idKey(id), id);
+  }
 
   return sorted;
 }
 
-function createDictionaryIndices(dicts: DictionaryBuilder): OpDictionaryIndices {
+/**
+ * Creates dictionary indices for encoding, with support for collecting contexts.
+ */
+function createDictionaryIndices(dicts: DictionaryBuilder): {
+  indices: OpDictionaryIndices;
+  getContexts: () => Context[];
+} {
   const propToIndex = new Map<string, number>();
   const propToDataType = new Map<string, DataType>();
   const relTypeToIndex = new Map<string, number>();
   const langToIndex = new Map<string, number>();
   const unitToIndex = new Map<string, number>();
   const objToIndex = new Map<string, number>();
+  const ctxIdToIndex = new Map<string, number>();
+
+  // Context collection (built during encoding)
+  const contexts: Context[] = [];
+  const contextToIndex = new Map<string, number>();
 
   let i = 0;
   for (const [key, prop] of dicts.properties) {
@@ -313,7 +346,38 @@ function createDictionaryIndices(dicts: DictionaryBuilder): OpDictionaryIndices 
     objToIndex.set(key, i++);
   }
 
-  return {
+  i = 0;
+  for (const key of dicts.contextIds.keys()) {
+    ctxIdToIndex.set(key, i++);
+  }
+
+  // Helper to add a context ID (for contexts collected during encoding)
+  function addContextId(id: Id): void {
+    const key = idKey(id);
+    if (!ctxIdToIndex.has(key)) {
+      const idx = ctxIdToIndex.size;
+      ctxIdToIndex.set(key, idx);
+      dicts.contextIds.set(key, id);
+    }
+  }
+
+  // Helper to add a relation type (for context edges)
+  function addRelationType(id: Id): void {
+    const key = idKey(id);
+    if (!relTypeToIndex.has(key)) {
+      const idx = relTypeToIndex.size;
+      relTypeToIndex.set(key, idx);
+      dicts.relationTypes.set(key, id);
+    }
+  }
+
+  // Create a serializable key for context deduplication
+  function contextKey(ctx: Context): string {
+    const edgeKeys = ctx.edges.map(e => `${idKey(e.typeId)}:${idKey(e.toEntityId)}`).join(',');
+    return `${idKey(ctx.rootId)}|${edgeKeys}`;
+  }
+
+  const indices: OpDictionaryIndices = {
     getPropertyIndex(id: Id): number {
       const key = idKey(id);
       const idx = propToIndex.get(key);
@@ -364,7 +428,35 @@ function createDictionaryIndices(dicts: DictionaryBuilder): OpDictionaryIndices 
       }
       return idx;
     },
+    getContextIdIndex(id: Id): number {
+      const key = idKey(id);
+      const idx = ctxIdToIndex.get(key);
+      if (idx === undefined) {
+        throw new Error(`context ID not in dictionary: ${key}`);
+      }
+      return idx;
+    },
+    addContext(ctx: Context): number {
+      const key = contextKey(ctx);
+      const existing = contextToIndex.get(key);
+      if (existing !== undefined) {
+        return existing;
+      }
+      // Register all IDs in the context
+      addContextId(ctx.rootId);
+      for (const edge of ctx.edges) {
+        addRelationType(edge.typeId);
+        addContextId(edge.toEntityId);
+      }
+      // Add to contexts array
+      const idx = contexts.length;
+      contexts.push(ctx);
+      contextToIndex.set(key, idx);
+      return idx;
+    },
   };
+
+  return { indices, getContexts: () => contexts };
 }
 
 function writeDictionaries(writer: Writer, dicts: DictionaryBuilder): void {
@@ -398,6 +490,28 @@ function writeDictionaries(writer: Writer, dicts: DictionaryBuilder): void {
   for (const id of dicts.objects.values()) {
     writer.writeId(id);
   }
+
+  // Context IDs
+  writer.writeVarintNumber(dicts.contextIds.size);
+  for (const id of dicts.contextIds.values()) {
+    writer.writeId(id);
+  }
+}
+
+function writeContexts(writer: Writer, contexts: Context[], indices: OpDictionaryIndices): void {
+  writer.writeVarintNumber(contexts.length);
+  for (const ctx of contexts) {
+    // root_id as ContextRef (index into contextIds)
+    writer.writeVarintNumber(indices.getContextIdIndex(ctx.rootId));
+    // edges
+    writer.writeVarintNumber(ctx.edges.length);
+    for (const edge of ctx.edges) {
+      // type_id as RelationTypeRef
+      writer.writeVarintNumber(indices.getRelationTypeIndex(edge.typeId));
+      // to_entity_id as ContextRef
+      writer.writeVarintNumber(indices.getContextIdIndex(edge.toEntityId));
+    }
+  }
 }
 
 function readDictionaries(reader: Reader): WireDictionaries {
@@ -425,7 +539,49 @@ function readDictionaries(reader: Reader): WireDictionaries {
   // Objects
   const objects = reader.readIdVec();
 
-  return { properties, relationTypes, languages, units, objects };
+  // Context IDs
+  const contextIds = reader.readIdVec();
+
+  return { properties, relationTypes, languages, units, objects, contextIds, contexts: [] };
+}
+
+function readContexts(reader: Reader, dicts: WireDictionaries): Context[] {
+  const contextCount = reader.readVarintNumber();
+  const contexts: Context[] = [];
+
+  for (let i = 0; i < contextCount; i++) {
+    // root_id as ContextRef
+    const rootIdIndex = reader.readVarintNumber();
+    if (rootIdIndex >= dicts.contextIds.length) {
+      throw new DecodeError("E002", `context ID index ${rootIdIndex} out of bounds`);
+    }
+    const rootId = dicts.contextIds[rootIdIndex];
+
+    // edges
+    const edgeCount = reader.readVarintNumber();
+    const edges: ContextEdge[] = [];
+    for (let j = 0; j < edgeCount; j++) {
+      // type_id as RelationTypeRef
+      const typeIdIndex = reader.readVarintNumber();
+      if (typeIdIndex >= dicts.relationTypes.length) {
+        throw new DecodeError("E002", `relation type index ${typeIdIndex} out of bounds`);
+      }
+      const typeId = dicts.relationTypes[typeIdIndex];
+
+      // to_entity_id as ContextRef
+      const toEntityIdIndex = reader.readVarintNumber();
+      if (toEntityIdIndex >= dicts.contextIds.length) {
+        throw new DecodeError("E002", `context ID index ${toEntityIdIndex} out of bounds`);
+      }
+      const toEntityId = dicts.contextIds[toEntityIdIndex];
+
+      edges.push({ typeId, toEntityId });
+    }
+
+    contexts.push({ rootId, edges });
+  }
+
+  return contexts;
 }
 
 function createDictionaryLookups(dicts: WireDictionaries): OpDictionaryLookups {
@@ -463,6 +619,18 @@ function createDictionaryLookups(dicts: WireDictionaries): OpDictionaryLookups {
         throw new DecodeError("E002", `relation type index ${index} out of bounds (size: ${dicts.relationTypes.length})`);
       }
       return dicts.relationTypes[index];
+    },
+    getContextId(index: number): Id {
+      if (index >= dicts.contextIds.length) {
+        throw new DecodeError("E002", `context ID index ${index} out of bounds (size: ${dicts.contextIds.length})`);
+      }
+      return dicts.contextIds[index];
+    },
+    getContext(index: number): Context | undefined {
+      if (index >= dicts.contexts.length) {
+        return undefined;
+      }
+      return dicts.contexts[index];
     },
   };
 }

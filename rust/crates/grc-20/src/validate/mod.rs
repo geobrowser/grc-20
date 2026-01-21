@@ -122,7 +122,7 @@ mod tests {
             name: Cow::Borrowed(""),
             authors: vec![],
             created_at: 0,
-            ops: vec![Op::CreateEntity(CreateEntity {
+                        ops: vec![Op::CreateEntity(CreateEntity {
                 id: [2u8; 16],
                 values: vec![PropertyValue {
                     property: [1u8; 16],
@@ -131,6 +131,7 @@ mod tests {
                         language: None,
                     },
                 }],
+                context: None,
             })],
         };
 
@@ -148,12 +149,13 @@ mod tests {
             name: Cow::Borrowed(""),
             authors: vec![],
             created_at: 0,
-            ops: vec![Op::CreateEntity(CreateEntity {
+                        ops: vec![Op::CreateEntity(CreateEntity {
                 id: [2u8; 16],
                 values: vec![PropertyValue {
                     property: [1u8; 16],
                     value: Value::Int64 { value: 42, unit: None },
                 }],
+                context: None,
             })],
         };
 
@@ -170,7 +172,7 @@ mod tests {
             name: Cow::Borrowed(""),
             authors: vec![],
             created_at: 0,
-            ops: vec![Op::CreateEntity(CreateEntity {
+                        ops: vec![Op::CreateEntity(CreateEntity {
                 id: [2u8; 16],
                 values: vec![PropertyValue {
                     property: [99u8; 16], // Unknown property
@@ -179,6 +181,7 @@ mod tests {
                         language: None,
                     },
                 }],
+                context: None,
             })],
         };
 

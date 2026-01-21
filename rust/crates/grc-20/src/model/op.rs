@@ -4,7 +4,7 @@
 
 use std::borrow::Cow;
 
-use crate::model::{Id, PropertyValue};
+use crate::model::{Context, Id, PropertyValue};
 
 /// An atomic operation that modifies graph state (spec Section 3.1).
 #[derive(Debug, Clone, PartialEq)]
@@ -47,6 +47,8 @@ pub struct CreateEntity<'a> {
     pub id: Id,
     /// Initial values for the entity.
     pub values: Vec<PropertyValue<'a>>,
+    /// Optional context for grouping changes (spec Section 4.5).
+    pub context: Option<Context>,
 }
 
 /// Updates an existing entity (spec Section 3.2).
@@ -62,6 +64,8 @@ pub struct UpdateEntity<'a> {
     pub set_properties: Vec<PropertyValue<'a>>,
     /// Clear values for these properties (optionally specific language for TEXT).
     pub unset_values: Vec<UnsetValue>,
+    /// Optional context for grouping changes (spec Section 4.5).
+    pub context: Option<Context>,
 }
 
 /// Specifies which language slot to clear for an UnsetValue.
@@ -117,6 +121,7 @@ impl<'a> UpdateEntity<'a> {
             id,
             set_properties: Vec::new(),
             unset_values: Vec::new(),
+            context: None,
         }
     }
 
@@ -179,6 +184,8 @@ pub struct CreateRelation<'a> {
     pub entity: Option<Id>,
     /// Optional ordering position (fractional indexing).
     pub position: Option<Cow<'a, str>>,
+    /// Optional context for grouping changes (spec Section 4.5).
+    pub context: Option<Context>,
 }
 
 impl CreateRelation<'_> {
@@ -230,6 +237,8 @@ pub struct UpdateRelation<'a> {
     pub position: Option<Cow<'a, str>>,
     /// Fields to clear/unset.
     pub unset: Vec<UnsetRelationField>,
+    /// Optional context for grouping changes (spec Section 4.5).
+    pub context: Option<Context>,
 }
 
 impl UpdateRelation<'_> {
@@ -243,6 +252,7 @@ impl UpdateRelation<'_> {
             to_version: None,
             position: None,
             unset: Vec::new(),
+            context: None,
         }
     }
 
@@ -325,7 +335,8 @@ mod tests {
         assert_eq!(
             Op::CreateEntity(CreateEntity {
                 id: [0; 16],
-                values: vec![]
+                values: vec![],
+                context: None,
             })
             .op_type(),
             1
@@ -393,6 +404,7 @@ mod tests {
             from_version: None,
             to_space: None,
             to_version: None,
+            context: None,
         };
         assert_eq!(rel_auto.entity_id(), relation_entity_id(&rel_id));
         assert!(!rel_auto.has_explicit_entity());
@@ -412,6 +424,7 @@ mod tests {
             from_version: None,
             to_space: None,
             to_version: None,
+            context: None,
         };
         assert_eq!(rel_explicit.entity_id(), explicit_entity);
         assert!(rel_explicit.has_explicit_entity());

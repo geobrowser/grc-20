@@ -45,6 +45,7 @@ let edit = Edit {
                     language: None,
                 },
             }],
+            context: None, // Optional context for change grouping
         }),
     ],
 };
@@ -181,6 +182,7 @@ let edit = decode_edit_borrowed(&bytes)?;
 // Strings borrow from input buffer - no allocation
 assert!(matches!(edit.name, Cow::Borrowed(_)));
 ```
+- `CreateValueRef` — Create a referenceable ID for a value slot
 
 ### Compression
 

@@ -43,6 +43,9 @@ const FLAG_HAS_LANGUAGE: u8 = 0x01;
 const FLAG_HAS_SPACE: u8 = 0x02;
 const CREATE_VALUE_REF_RESERVED_MASK: u8 = 0xFC;
 
+// Context reference sentinel value (no context)
+const NO_CONTEXT_REF: u32 = 0xFFFFFFFF;
+
 // UpdateRelation set flags (bit order matches field order in spec Section 6.4)
 const UPDATE_SET_FROM_SPACE: u8 = 0x01;
 const UPDATE_SET_FROM_VERSION: u8 = 0x02;
@@ -101,7 +104,20 @@ fn decode_create_entity<'a>(
         values.push(decode_property_value(reader, dicts)?);
     }
 
-    Ok(Op::CreateEntity(CreateEntity { id, values }))
+    // Read context_ref: 0xFFFFFFFF = no context, else index into contexts[]
+    let context_ref_raw = reader.read_varint("context_ref")? as u32;
+    let context = if context_ref_raw == NO_CONTEXT_REF {
+        None
+    } else {
+        let idx = context_ref_raw as usize;
+        Some(dicts.get_context(idx).ok_or_else(|| DecodeError::IndexOutOfBounds {
+            dict: "contexts",
+            index: idx,
+            size: dicts.contexts.len(),
+        })?.clone())
+    };
+
+    Ok(Op::CreateEntity(CreateEntity { id, values, context }))
 }
 
 fn decode_update_entity<'a>(
@@ -184,6 +200,19 @@ fn decode_update_entity<'a>(
             update.unset_values.push(UnsetValue { property, language });
         }
     }
+
+    // Read context_ref: 0xFFFFFFFF = no context, else index into contexts[]
+    let context_ref_raw = reader.read_varint("context_ref")? as u32;
+    update.context = if context_ref_raw == NO_CONTEXT_REF {
+        None
+    } else {
+        let idx = context_ref_raw as usize;
+        Some(dicts.get_context(idx).ok_or_else(|| DecodeError::IndexOutOfBounds {
+            dict: "contexts",
+            index: idx,
+            size: dicts.contexts.len(),
+        })?.clone())
+    };
 
     Ok(Op::UpdateEntity(update))
 }
@@ -307,6 +336,19 @@ fn decode_create_relation<'a>(
         None
     };
 
+    // Read context_ref: 0xFFFFFFFF = no context, else index into contexts[]
+    let context_ref_raw = reader.read_varint("context_ref")? as u32;
+    let context = if context_ref_raw == NO_CONTEXT_REF {
+        None
+    } else {
+        let idx = context_ref_raw as usize;
+        Some(dicts.get_context(idx).ok_or_else(|| DecodeError::IndexOutOfBounds {
+            dict: "contexts",
+            index: idx,
+            size: dicts.contexts.len(),
+        })?.clone())
+    };
+
     Ok(Op::CreateRelation(CreateRelation {
         id,
         relation_type,
@@ -320,6 +362,7 @@ fn decode_create_relation<'a>(
         from_version,
         to_space,
         to_version,
+        context,
     }))
 }
 
@@ -401,6 +444,19 @@ fn decode_update_relation<'a>(
         unset.push(UnsetRelationField::Position);
     }
 
+    // Read context_ref: 0xFFFFFFFF = no context, else index into contexts[]
+    let context_ref_raw = reader.read_varint("context_ref")? as u32;
+    let context = if context_ref_raw == NO_CONTEXT_REF {
+        None
+    } else {
+        let idx = context_ref_raw as usize;
+        Some(dicts.get_context(idx).ok_or_else(|| DecodeError::IndexOutOfBounds {
+            dict: "contexts",
+            index: idx,
+            size: dicts.contexts.len(),
+        })?.clone())
+    };
+
     Ok(Op::UpdateRelation(UpdateRelation {
         id,
         from_space,
@@ -409,6 +465,7 @@ fn decode_update_relation<'a>(
         to_version,
         position,
         unset,
+        context,
     }))
 }
 
@@ -565,6 +622,13 @@ fn encode_create_entity(
         encode_property_value(writer, pv, dict_builder, data_type)?;
     }
 
+    // Write context_ref: 0xFFFFFFFF = no context, else index into contexts[]
+    let context_ref = match &ce.context {
+        Some(ctx) => dict_builder.add_context(ctx) as u32,
+        None => NO_CONTEXT_REF,
+    };
+    writer.write_varint(context_ref as u64);
+
     Ok(())
 }
 
@@ -616,6 +680,13 @@ fn encode_update_entity(
             writer.write_varint(lang_value as u64);
         }
     }
+
+    // Write context_ref: 0xFFFFFFFF = no context, else index into contexts[]
+    let context_ref = match &ue.context {
+        Some(ctx) => dict_builder.add_context(ctx) as u32,
+        None => NO_CONTEXT_REF,
+    };
+    writer.write_varint(context_ref as u64);
 
     Ok(())
 }
@@ -723,6 +794,13 @@ fn encode_create_relation(
         writer.write_string(pos);
     }
 
+    // Write context_ref: 0xFFFFFFFF = no context, else index into contexts[]
+    let context_ref = match &cr.context {
+        Some(ctx) => dict_builder.add_context(ctx) as u32,
+        None => NO_CONTEXT_REF,
+    };
+    writer.write_varint(context_ref as u64);
+
     Ok(())
 }
 
@@ -785,6 +863,13 @@ fn encode_update_relation(
         validate_position(pos)?;
         writer.write_string(pos);
     }
+
+    // Write context_ref: 0xFFFFFFFF = no context, else index into contexts[]
+    let context_ref = match &ur.context {
+        Some(ctx) => dict_builder.add_context(ctx) as u32,
+        None => NO_CONTEXT_REF,
+    };
+    writer.write_varint(context_ref as u64);
 
     Ok(())
 }
@@ -880,6 +965,7 @@ mod tests {
                     language: None,
                 },
             }],
+            context: None,
         });
 
         let mut dict_builder = DictionaryBuilder::new();
@@ -929,6 +1015,7 @@ mod tests {
             from_version: None,
             to_space: None,
             to_version: None,
+            context: None,
         });
 
         let mut dict_builder = DictionaryBuilder::new();
@@ -977,6 +1064,7 @@ mod tests {
             from_version: None,
             to_space: None,
             to_version: None,
+            context: None,
         });
 
         let mut dict_builder = DictionaryBuilder::new();
@@ -1020,6 +1108,7 @@ mod tests {
             from_version: Some([6u8; 16]),
             to_space: Some([7u8; 16]),
             to_version: Some([8u8; 16]),
+            context: None,
         });
 
         let mut dict_builder = DictionaryBuilder::new();
@@ -1066,6 +1155,7 @@ mod tests {
             from_version: None,
             to_space: None,
             to_version: None,
+            context: None,
         });
 
         let mut dict_builder = DictionaryBuilder::new();
@@ -1167,6 +1257,7 @@ mod tests {
             to_version: Some([5u8; 16]),
             position: Some(Cow::Owned("xyz".to_string())),
             unset: vec![],
+            context: None,
         });
 
         let mut dict_builder = DictionaryBuilder::new();
@@ -1213,6 +1304,7 @@ mod tests {
                 UnsetRelationField::ToVersion,
                 UnsetRelationField::Position,
             ],
+            context: None,
         });
 
         let mut dict_builder = DictionaryBuilder::new();

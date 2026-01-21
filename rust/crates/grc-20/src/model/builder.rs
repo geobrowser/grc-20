@@ -98,6 +98,7 @@ impl<'a> EditBuilder<'a> {
         self.ops.push(Op::CreateEntity(CreateEntity {
             id,
             values: builder.values,
+            context: None,
         }));
         self
     }
@@ -107,6 +108,7 @@ impl<'a> EditBuilder<'a> {
         self.ops.push(Op::CreateEntity(CreateEntity {
             id,
             values: Vec::new(),
+            context: None,
         }));
         self
     }
@@ -121,6 +123,7 @@ impl<'a> EditBuilder<'a> {
             id: builder.id,
             set_properties: builder.set_properties,
             unset_values: builder.unset_values,
+            context: None,
         }));
         self
     }
@@ -162,6 +165,7 @@ impl<'a> EditBuilder<'a> {
             from_version: None,
             to_space: None,
             to_version: None,
+            context: None,
         }));
         self
     }
@@ -192,6 +196,7 @@ impl<'a> EditBuilder<'a> {
             to_version: builder.to_version,
             position: builder.position,
             unset: builder.unset,
+            context: None,
         }));
         self
     }
@@ -206,6 +211,7 @@ impl<'a> EditBuilder<'a> {
             to_version: None,
             position,
             unset: vec![],
+            context: None,
         }));
         self
     }
@@ -249,7 +255,7 @@ impl<'a> EditBuilder<'a> {
             name: self.name,
             authors: self.authors,
             created_at: self.created_at,
-            ops: self.ops,
+                        ops: self.ops,
         }
     }
 
@@ -722,6 +728,7 @@ impl<'a> RelationBuilder<'a> {
             from_version: self.from_version,
             to_space: self.to_space,
             to_version: self.to_version,
+            context: None,
         })
     }
 

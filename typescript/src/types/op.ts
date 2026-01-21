@@ -1,4 +1,5 @@
 import type { Id } from "./id.js";
+import type { Context } from "./edit.js";
 import type { PropertyValue } from "./value.js";
 
 /**
@@ -37,6 +38,8 @@ export interface CreateEntity {
   type: "createEntity";
   id: Id;
   values: PropertyValue[];
+  /** Optional context for grouping changes (spec Section 4.5). */
+  context?: Context;
 }
 
 /**
@@ -51,6 +54,8 @@ export interface UpdateEntity {
   id: Id;
   set: PropertyValue[];
   unset: UnsetValue[];
+  /** Optional context for grouping changes (spec Section 4.5). */
+  context?: Context;
 }
 
 /**
@@ -90,6 +95,8 @@ export interface CreateRelation {
   toVersion?: Id;
   entity?: Id;
   position?: string;
+  /** Optional context for grouping changes (spec Section 4.5). */
+  context?: Context;
 }
 
 /**
@@ -111,6 +118,8 @@ export interface UpdateRelation {
   toVersion?: Id;
   position?: string;
   unset: UnsetRelationField[];
+  /** Optional context for grouping changes (spec Section 4.5). */
+  context?: Context;
 }
 
 /**

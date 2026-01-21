@@ -1,4 +1,5 @@
 import type { Id } from "../types/id.js";
+import type { Context } from "../types/edit.js";
 import type {
   CreateEntity,
   CreateRelation,
@@ -35,11 +36,14 @@ import {
 } from "./value.js";
 
 /**
- * Extended dictionary indices for ops (includes objects).
+ * Extended dictionary indices for ops (includes objects and contexts).
  */
 export interface OpDictionaryIndices extends DictionaryIndices {
   getObjectIndex(id: Id): number;
   getRelationTypeIndex(id: Id): number;
+  getContextIdIndex(id: Id): number;
+  /** Adds or gets the index for a context (deduplicates). */
+  addContext(ctx: Context): number;
 }
 
 /**
@@ -48,6 +52,9 @@ export interface OpDictionaryIndices extends DictionaryIndices {
 export interface OpDictionaryLookups extends DictionaryLookups {
   getObject(index: number): Id;
   getRelationType(index: number): Id;
+  getContextId(index: number): Id;
+  /** Gets a context by index (returns undefined if not found). */
+  getContext(index: number): Context | undefined;
 }
 
 // UpdateEntity flags
@@ -67,6 +74,9 @@ const RELATION_TO_IS_VALUE_REF = 0x80;
 // CreateValueRef flags
 const VALUE_REF_HAS_LANGUAGE = 0x01;
 const VALUE_REF_HAS_SPACE = 0x02;
+
+// Context ref sentinel value (no context)
+const NO_CONTEXT_REF = 0xFFFFFFFF;
 
 // UpdateRelation set flags
 const UPDATE_REL_SET_FROM_SPACE = 0x01;
@@ -124,6 +134,9 @@ function encodeCreateEntity(writer: Writer, op: CreateEntity, dicts: OpDictionar
   for (const value of op.values) {
     encodePropertyValue(writer, value, dicts);
   }
+  // context_ref: 0xFFFFFFFF = no context, else index
+  const contextRef = op.context !== undefined ? dicts.addContext(op.context) : NO_CONTEXT_REF;
+  writer.writeVarint(BigInt(contextRef));
 }
 
 function encodeUpdateEntity(writer: Writer, op: UpdateEntity, dicts: OpDictionaryIndices): void {
@@ -148,6 +161,10 @@ function encodeUpdateEntity(writer: Writer, op: UpdateEntity, dicts: OpDictionar
       encodeUnsetValue(writer, u, dicts);
     }
   }
+
+  // context_ref: 0xFFFFFFFF = no context, else index
+  const contextRef = op.context !== undefined ? dicts.addContext(op.context) : NO_CONTEXT_REF;
+  writer.writeVarint(BigInt(contextRef));
 }
 
 function encodeUnsetValue(writer: Writer, unset: UnsetValue, dicts: DictionaryIndices): void {
@@ -221,6 +238,10 @@ function encodeCreateRelation(writer: Writer, op: CreateRelation, dicts: OpDicti
   if (op.toVersion) writer.writeId(op.toVersion);
   if (op.entity) writer.writeId(op.entity);
   if (op.position) writer.writeString(op.position);
+
+  // context_ref: 0xFFFFFFFF = no context, else index
+  const contextRef = op.context !== undefined ? dicts.addContext(op.context) : NO_CONTEXT_REF;
+  writer.writeVarint(BigInt(contextRef));
 }
 
 function encodeUpdateRelation(writer: Writer, op: UpdateRelation, dicts: OpDictionaryIndices): void {
@@ -265,6 +286,10 @@ function encodeUpdateRelation(writer: Writer, op: UpdateRelation, dicts: OpDicti
   if (op.toSpace !== undefined) writer.writeId(op.toSpace);
   if (op.toVersion !== undefined) writer.writeId(op.toVersion);
   if (op.position !== undefined) writer.writeString(op.position);
+
+  // context_ref: 0xFFFFFFFF = no context, else index
+  const contextRef = op.context !== undefined ? dicts.addContext(op.context) : NO_CONTEXT_REF;
+  writer.writeVarint(BigInt(contextRef));
 }
 
 function encodeDeleteRelation(writer: Writer, op: DeleteRelation, dicts: OpDictionaryIndices): void {
@@ -333,7 +358,17 @@ function decodeCreateEntity(reader: Reader, dicts: OpDictionaryLookups): CreateE
   for (let i = 0; i < valueCount; i++) {
     values.push(decodePropertyValue(reader, dicts));
   }
-  return { type: "createEntity", id, values };
+  // Read context_ref and resolve to Context
+  const contextRefValue = reader.readVarint();
+  let context: Context | undefined = undefined;
+  if (contextRefValue !== BigInt(NO_CONTEXT_REF)) {
+    const contextIndex = Number(contextRefValue);
+    context = dicts.getContext(contextIndex);
+    if (!context) {
+      throw new DecodeError("E002", `context_ref ${contextIndex} out of bounds`);
+    }
+  }
+  return { type: "createEntity", id, values, context };
 }
 
 function decodeUpdateEntity(reader: Reader, dicts: OpDictionaryLookups): UpdateEntity {
@@ -361,7 +396,18 @@ function decodeUpdateEntity(reader: Reader, dicts: OpDictionaryLookups): UpdateE
     }
   }
 
-  return { type: "updateEntity", id, set, unset };
+  // Read context_ref and resolve to Context
+  const contextRefValue = reader.readVarint();
+  let context: Context | undefined = undefined;
+  if (contextRefValue !== BigInt(NO_CONTEXT_REF)) {
+    const contextIndex = Number(contextRefValue);
+    context = dicts.getContext(contextIndex);
+    if (!context) {
+      throw new DecodeError("E002", `context_ref ${contextIndex} out of bounds`);
+    }
+  }
+
+  return { type: "updateEntity", id, set, unset, context };
 }
 
 function decodeUnsetValue(reader: Reader, dicts: DictionaryLookups): UnsetValue {
@@ -419,6 +465,17 @@ function decodeCreateRelation(reader: Reader, dicts: OpDictionaryLookups): Creat
   const entity = flags & RELATION_HAS_ENTITY ? reader.readId() : undefined;
   const position = flags & RELATION_HAS_POSITION ? reader.readString() : undefined;
 
+  // Read context_ref and resolve to Context
+  const contextRefValue = reader.readVarint();
+  let context: Context | undefined = undefined;
+  if (contextRefValue !== BigInt(NO_CONTEXT_REF)) {
+    const contextIndex = Number(contextRefValue);
+    context = dicts.getContext(contextIndex);
+    if (!context) {
+      throw new DecodeError("E002", `context_ref ${contextIndex} out of bounds`);
+    }
+  }
+
   return {
     type: "createRelation",
     id,
@@ -433,6 +490,7 @@ function decodeCreateRelation(reader: Reader, dicts: OpDictionaryLookups): Creat
     toVersion,
     entity,
     position,
+    context,
   };
 }
 
@@ -468,6 +526,17 @@ function decodeUpdateRelation(reader: Reader, dicts: OpDictionaryLookups): Updat
   if (unsetFlags & UPDATE_REL_UNSET_TO_VERSION) unset.push("toVersion");
   if (unsetFlags & UPDATE_REL_UNSET_POSITION) unset.push("position");
 
+  // Read context_ref and resolve to Context
+  const contextRefValue = reader.readVarint();
+  let context: Context | undefined = undefined;
+  if (contextRefValue !== BigInt(NO_CONTEXT_REF)) {
+    const contextIndex = Number(contextRefValue);
+    context = dicts.getContext(contextIndex);
+    if (!context) {
+      throw new DecodeError("E002", `context_ref ${contextIndex} out of bounds`);
+    }
+  }
+
   return {
     type: "updateRelation",
     id,
@@ -477,6 +546,7 @@ function decodeUpdateRelation(reader: Reader, dicts: OpDictionaryLookups): Updat
     toVersion,
     position,
     unset,
+    context,
   };
 }
 

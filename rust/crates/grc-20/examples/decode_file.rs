@@ -105,7 +105,7 @@ fn main() {
     println!("\n=== First 20 Operations (detail) ===");
     for (i, op) in edit.ops.iter().take(20).enumerate() {
         match op {
-            Op::CreateEntity(CreateEntity { id, values }) => {
+            Op::CreateEntity(CreateEntity { id, values, .. }) => {
                 println!("[{}] CreateEntity {}", i, format_id(id));
                 for pv in values.iter().take(5) {
                     println!("      {} = {}", format_id(&pv.property), format_value(&pv.value));
@@ -114,7 +114,7 @@ fn main() {
                     println!("      ... and {} more values", values.len() - 5);
                 }
             }
-            Op::UpdateEntity(UpdateEntity { id, set_properties, unset_values }) => {
+            Op::UpdateEntity(UpdateEntity { id, set_properties, unset_values, .. }) => {
                 println!("[{}] UpdateEntity {}", i, format_id(id));
                 for pv in set_properties.iter().take(3) {
                     println!("      SET {} = {}", format_id(&pv.property), format_value(&pv.value));

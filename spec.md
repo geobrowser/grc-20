@@ -726,6 +726,8 @@ Edit {
   language_ids: List<ID>    // Language entities for localized TEXT values
   unit_ids: List<ID>        // Unit entities for numerical values
   object_ids: List<ID>
+  context_ids: List<ID>     // IDs used in contexts (root_ids and edge to_entity_ids)
+  contexts: List<Context>   // Context metadata for grouping (Section 4.5)
   ops: List<Op>
 }
 ```
@@ -811,6 +813,8 @@ The property dictionary includes both ID and DataType. This allows values to omi
 
 **Object dictionary requirement (NORMATIVE):** All entities and relations referenced in an edit MUST be declared in the `object_ids` dictionary. This includes: operation targets (UpdateEntity, DeleteEntity, etc.) and relation endpoints when targeting entities. CreateRelation encodes the relation ID inline, so it does not require a dictionary entry unless referenced by other ops in the same edit.
 
+**Context ID dictionary requirement (NORMATIVE):** All entity IDs used in context metadata (root_id and edge to_entity_id fields) MUST be declared in the `context_ids` dictionary. Context indices reference this dictionary, not the objects dictionary, to keep context metadata separate from operation object references.
+
 **Value ref endpoints:** Value ref IDs are NOT included in `object_ids`. When a relation endpoint targets a value ref, the ID is encoded inline (see Section 6.4) rather than as an ObjectRef. This avoids bloating the object dictionary with value ref IDs in provenance-heavy edits.
 
 **Size limits (NORMATIVE):** All dictionary counts MUST be ≤ 4,294,967,294 (0xFFFFFFFE). All reference indices MUST be < their respective dictionary count. Out-of-bounds indices MUST be rejected (E002).
@@ -846,7 +850,43 @@ Canonical encoding produces deterministic bytes for the same logical edit. Use c
 
 **Performance note:** Canonical encoding requires sorting dictionaries and authors after collection, which is substantially slower than fast mode. Implementations SHOULD offer both modes.
 
-### 4.5 Edit Publishing
+### 4.5 Edit Contexts
+
+Edits can include context metadata to support context-aware change grouping (e.g., grouping block changes under their parent entity).
+
+**Context:**
+```
+Context {
+  root_id: ID                // Root entity for this context
+  edges: List<ContextEdge>   // Path from root to the changed entity
+}
+```
+
+**ContextEdge:**
+```
+ContextEdge {
+  type_id: ID         // Relation type ID (e.g., BLOCKS_ID)
+  to_entity_id: ID    // Target entity ID at this edge
+}
+```
+
+The `edges` list represents the path from `root_id` to the entity being modified. For example, if entity "TextBlock_9" is a block of entity "Byron", the context would be:
+- `root_id`: Byron
+- `edges`: `[{ type_id: BLOCKS_ID, to_entity_id: TextBlock_9 }]`
+
+**Per-op context reference:** Each op can optionally reference a context by index:
+```
+context_ref: varint?   // Index into the edit's contexts array
+```
+
+If `context_ref` is omitted, the op has no explicit context. Multiple ops can share a single context entry via `context_ref`.
+
+**Rationale:**
+- Avoids repeating full context paths on every op
+- Allows a single edit to span many contexts
+- Enables UI grouping without changing the diff API surface
+
+### 4.6 Edit Publishing
 
 1. Serialize edit to binary format (Section 6)
 2. Publish to content-addressed storage (IPFS)
@@ -966,6 +1006,12 @@ unit_count: varint
 unit_ids: ID[]                   // Unit entity IDs for numerical values
 object_count: varint
 object_ids: ID[]
+context_id_count: varint
+context_ids: ID[]                // IDs used in contexts (root_ids and edge to_entity_ids)
+
+-- Contexts
+context_count: varint
+contexts: Context[]              // Context metadata for grouping
 
 -- Operations
 op_count: varint
@@ -974,12 +1020,31 @@ ops: Op[]
 
 **Version rejection (NORMATIVE):** Decoders MUST reject edits with unknown Version values.
 
+**ContextRef:**
+```
+index: varint    // Must be < context_id_count
+```
+
+**Context encoding:**
+```
+Context:
+  root_id: ContextRef              // Index into context_ids
+  edge_count: varint
+  edges: ContextEdge[]
+
+ContextEdge:
+  type_id: RelationTypeRef         // Index into relation_type_ids
+  to_entity_id: ContextRef         // Index into context_ids
+```
+
 ### 6.4 Op Encoding
 
 ```
 Op:
   op_type: uint8
   payload: <type-specific>
+  [if op_type has context_ref support]:
+    context_ref: varint?         // Index into contexts[] (0xFFFFFFFF = none)
 
 op_type values:
   1 = CreateEntity
@@ -993,11 +1058,14 @@ op_type values:
   9 = CreateValueRef
 ```
 
+**Context reference encoding:** Ops that modify entities or relations can include a context reference to indicate which context they belong to. The `context_ref` field is encoded as a varint where `0xFFFFFFFF` means no context, and other values are indices into the edit's `contexts` array.
+
 **CreateEntity:**
 ```
 id: ID
 value_count: varint
 values: Value[]
+context_ref: varint              // 0xFFFFFFFF = no context, else index into contexts[]
 ```
 
 **UpdateEntity:**
@@ -1014,6 +1082,7 @@ flags: uint8
 [if has_unset]:
   count: varint
   unset: UnsetValue[]
+context_ref: varint              // 0xFFFFFFFF = no context, else index into contexts[]
 
 UnsetValue:
   property: PropertyRef
@@ -1053,6 +1122,7 @@ flags: uint8
 [if has_to_version]: to_version: ID
 [if has_entity]: entity: ID    // Explicit reified entity
 [if has_position]: position: String
+context_ref: varint            // 0xFFFFFFFF = no context, else index into contexts[]
 ```
 
 **Endpoint encoding:** Entity and relation endpoints use ObjectRef (dictionary index). Value ref endpoints use inline ID (16 bytes) to avoid bloating the object dictionary. The `from_is_value_ref` and `to_is_value_ref` flags indicate which encoding is used.
@@ -1081,6 +1151,7 @@ unset_flags: uint8
 [if has_to_space]: to_space: ID
 [if has_to_version]: to_version: ID
 [if has_position]: position: String
+context_ref: varint              // 0xFFFFFFFF = no context, else index into contexts[]
 ```
 
 **DeleteRelation:**
@@ -1288,6 +1359,9 @@ Indexers MUST reject edits that fail structural validation:
 | Float values | NaN payload (see float rules in Section 2.5) |
 | Relation entity self-reference | CreateRelation has explicit `entity` equal to relation ID |
 | CreateValueRef language mismatch | `has_language = 1` but property's DataType is not TEXT |
+| Context ID indices | Index ≥ context_id_count |
+| Context indices | context_ref ≥ context_count (unless 0xFFFFFFFF) |
+| Context edge type indices | edge type_id ≥ relation_type_count |
 
 **Implementation-defined limits:** This specification does not mandate limits on ops per edit, values per entity, or TEXT/BYTES payload sizes. Implementations and governance systems MAY impose their own limits to prevent resource exhaustion.
 
