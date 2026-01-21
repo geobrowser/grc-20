@@ -61,9 +61,30 @@ export type Value =
   | { type: "decimal"; exponent: number; mantissa: DecimalMantissa; unit?: Id }
   | { type: "text"; value: string; language?: Id }
   | { type: "bytes"; value: Uint8Array }
-  | { type: "date"; value: string }
-  | { type: "time"; value: string }
-  | { type: "datetime"; value: string }
+  | {
+      /** Calendar date (6 bytes: int32 days + int16 offset_min). */
+      type: "date";
+      /** Signed days since Unix epoch (1970-01-01). */
+      days: number;
+      /** Signed UTC offset in minutes (e.g., +330 for +05:30). */
+      offsetMin: number;
+    }
+  | {
+      /** Time of day (8 bytes: int48 time_us + int16 offset_min). */
+      type: "time";
+      /** Microseconds since midnight (0 to 86,399,999,999). */
+      timeUs: bigint;
+      /** Signed UTC offset in minutes (e.g., +330 for +05:30). */
+      offsetMin: number;
+    }
+  | {
+      /** Combined date and time (10 bytes: int64 epoch_us + int16 offset_min). */
+      type: "datetime";
+      /** Microseconds since Unix epoch (1970-01-01T00:00:00Z). */
+      epochUs: bigint;
+      /** Signed UTC offset in minutes (e.g., +330 for +05:30). */
+      offsetMin: number;
+    }
   | { type: "schedule"; value: string }
   | { type: "point"; lon: number; lat: number; alt?: number }
   | { type: "embedding"; subType: EmbeddingSubType; dims: number; data: Uint8Array };
@@ -155,6 +176,24 @@ export function validateValue(value: Value): string | undefined {
       }
       if (value.alt !== undefined && Number.isNaN(value.alt)) {
         return "NaN is not allowed in Point altitude";
+      }
+      break;
+    case "date":
+      if (value.offsetMin < -1440 || value.offsetMin > 1440) {
+        return "DATE offsetMin outside range [-1440, +1440]";
+      }
+      break;
+    case "time":
+      if (value.timeUs < 0n || value.timeUs > 86_399_999_999n) {
+        return "TIME timeUs outside range [0, 86399999999]";
+      }
+      if (value.offsetMin < -1440 || value.offsetMin > 1440) {
+        return "TIME offsetMin outside range [-1440, +1440]";
+      }
+      break;
+    case "datetime":
+      if (value.offsetMin < -1440 || value.offsetMin > 1440) {
+        return "DATETIME offsetMin outside range [-1440, +1440]";
       }
       break;
     case "embedding": {

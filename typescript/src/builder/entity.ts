@@ -83,34 +83,40 @@ export class EntityBuilder {
   }
 
   /**
-   * Adds a DATE value (ISO 8601 date string).
+   * Adds a DATE value.
+   * @param days - Signed days since Unix epoch (1970-01-01)
+   * @param offsetMin - Signed UTC offset in minutes (e.g., +330 for +05:30)
    */
-  date(property: Id, value: string): this {
+  date(property: Id, days: number, offsetMin: number = 0): this {
     this.values.push({
       property,
-      value: { type: "date", value },
+      value: { type: "date", days, offsetMin },
     });
     return this;
   }
 
   /**
-   * Adds a TIME value (ISO 8601 time string with timezone).
+   * Adds a TIME value.
+   * @param timeUs - Microseconds since midnight (0 to 86,399,999,999)
+   * @param offsetMin - Signed UTC offset in minutes (e.g., +330 for +05:30)
    */
-  time(property: Id, value: string): this {
+  time(property: Id, timeUs: bigint, offsetMin: number = 0): this {
     this.values.push({
       property,
-      value: { type: "time", value },
+      value: { type: "time", timeUs, offsetMin },
     });
     return this;
   }
 
   /**
-   * Adds a DATETIME value (ISO 8601 datetime string).
+   * Adds a DATETIME value.
+   * @param epochUs - Microseconds since Unix epoch (1970-01-01T00:00:00Z)
+   * @param offsetMin - Signed UTC offset in minutes (e.g., +330 for +05:30)
    */
-  datetime(property: Id, value: string): this {
+  datetime(property: Id, epochUs: bigint, offsetMin: number = 0): this {
     this.values.push({
       property,
-      value: { type: "datetime", value },
+      value: { type: "datetime", epochUs, offsetMin },
     });
     return this;
   }

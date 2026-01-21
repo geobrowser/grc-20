@@ -117,9 +117,9 @@ DataType := BOOL | INT64 | FLOAT64 | DECIMAL | TEXT | BYTES
 | DECIMAL | exponent + mantissa | value = mantissa × 10^exponent |
 | TEXT | UTF-8 string | Length-prefixed |
 | BYTES | Raw bytes | Length-prefixed, opaque |
-| DATE | UTF-8 string | ISO 8601 date (YYYY, YYYY-MM, or YYYY-MM-DD) |
-| TIME | UTF-8 string | ISO 8601 time with timezone (HH:MM:SS[.frac]TZ) |
-| DATETIME | UTF-8 string | ISO 8601 datetime (YYYY-MM-DDTHH:MM:SS[.frac][TZ]) |
+| DATE | 6 bytes | days_since_epoch (int32) + offset_min (int16) |
+| TIME | 8 bytes | time_us (int48) + offset_min (int16) |
+| DATETIME | 10 bytes | epoch_us (int64) + offset_min (int16) |
 | SCHEDULE | UTF-8 string | RFC 5545 iCalendar component |
 | POINT | 2-3 FLOAT64, little-endian | [lon, lat] or [lon, lat, alt] WGS84 |
 | EMBEDDING | sub_type + dims + bytes | Dense vector for similarity search |
@@ -145,108 +145,89 @@ Applications needing to preserve precision (e.g., "12.30" vs "12.3") should stor
 
 #### DATE
 
-ISO 8601 calendar date with variable precision: year, year-month, or full date.
+Calendar date represented as a fixed 6-byte binary value.
 
 ```
-"2024"                           // Year only
-"2024-03"                        // Year-month
-"2024-03-15"                     // Full date
-"-0100"                          // 100 BCE (astronomical year -100)
-"-0100-03-15"                    // Full date in 101 BCE
+DATE {
+  days: int32       // Signed days since Unix epoch (1970-01-01)
+  offset_min: int16 // Signed UTC offset in minutes (e.g., +330 for +05:30)
+}
 ```
 
-**Wire format:** Length-prefixed UTF-8 string.
+**Wire format (NORMATIVE):** 6 bytes, fixed-width:
+- Bytes 0–3: `days` (signed 32-bit integer, little-endian)
+- Bytes 4–5: `offset_min` (signed 16-bit integer, little-endian)
 
-**Grammar (NORMATIVE):**
-```abnf
-date        = year / year-month / year-month-day
-year        = [sign] 4DIGIT
-year-month  = year "-" 2DIGIT
-year-month-day = year-month "-" 2DIGIT
-sign        = "+" / "-"
-```
+The `days` field represents the calendar date as days since 1970-01-01. The `offset_min` indicates the timezone context where the date is meaningful.
 
-Week dates (`2024-W01`) and ordinal dates (`2024-001`) are NOT supported.
+**Examples:**
+- March 15, 2024 UTC: `days = 19797`, `offset_min = 0`
+- March 15, 2024 in +05:30: `days = 19797`, `offset_min = 330`
 
-**Calendar basis (NORMATIVE):** All dates use the proleptic Gregorian calendar (Gregorian rules extended backwards before 1582).
-
-**Year numbering (NORMATIVE):** Years use astronomical year numbering where year 0 exists:
-- Year `0001` = 1 CE
-- Year `0000` = 1 BCE
-- Year `-0001` = 2 BCE
-- Year `-0100` = 101 BCE
+**Range:** int32 days provides a range of ±5.8 million years from 1970.
 
 **Validation (NORMATIVE):** Implementations MUST reject:
-- Month outside 1-12
-- Day outside valid range for the month (considering leap years)
-- Malformed structure (wrong separators, non-numeric components)
+- `offset_min` outside range [-1440, +1440] (±24 hours)
 
-**Sorting (NORMATIVE):** DATE values sort lexicographically by their string representation. Year-only values sort before year-month values with the same year; year-month values sort before full dates with the same year-month.
+**Sorting (NORMATIVE):** DATE values sort by `days` first, then by `offset_min` (both as signed integers).
 
 #### TIME
 
-ISO 8601 time of day with timezone. TIME values always include a timezone to ensure unambiguous interpretation.
+Time of day represented as a fixed 8-byte binary value.
 
 ```
-"14:30:00Z"                      // UTC time
-"14:30:00.000Z"                  // With milliseconds
-"14:30:00+05:30"                 // With timezone offset
-"00:00:00Z"                      // Midnight UTC
+TIME {
+  time_us: int48    // Microseconds since midnight (0 to 86,399,999,999)
+  offset_min: int16 // Signed UTC offset in minutes (e.g., +330 for +05:30)
+}
 ```
 
-**Wire format:** Length-prefixed UTF-8 string.
+**Wire format (NORMATIVE):** 8 bytes, fixed-width:
+- Bytes 0–5: `time_us` (signed 48-bit integer, little-endian)
+- Bytes 6–7: `offset_min` (signed 16-bit integer, little-endian)
 
-**Grammar (NORMATIVE):**
-```abnf
-time-value  = time timezone
-time        = 2DIGIT ":" 2DIGIT ":" 2DIGIT [fraction]
-fraction    = "." 1*9DIGIT
-timezone    = "Z" / offset
-offset      = ("+" / "-") 2DIGIT ":" 2DIGIT
-            / ("+" / "-") 4DIGIT
-```
+The `time_us` field represents microseconds since midnight in the local timezone indicated by `offset_min`.
+
+**Examples:**
+- 14:30:00 UTC: `time_us = 52200000000`, `offset_min = 0`
+- 14:30:00.500 in +05:30: `time_us = 52200500000`, `offset_min = 330`
+- Midnight UTC: `time_us = 0`, `offset_min = 0`
+
+**Range:** int48 microseconds easily covers a full day (max 86,399,999,999 µs).
 
 **Validation (NORMATIVE):** Implementations MUST reject:
-- Hours > 23, minutes > 59, seconds > 60
-- Missing timezone
-- Malformed structure (wrong separators, non-numeric components)
+- `time_us` outside range [0, 86,399,999,999]
+- `offset_min` outside range [-1440, +1440] (±24 hours)
 
-**Sorting (NORMATIVE):** TIME values sort by their UTC-normalized instant. When two values represent the same instant, the value with more precision sorts first. Tie-break by byte comparison.
+**Sorting (NORMATIVE):** TIME values sort by their UTC-normalized instant (`time_us - offset_min * 60_000_000`). Tie-break by `offset_min`.
 
 #### DATETIME
 
-ISO 8601 combined date and time with timezone. DATETIME values always include a timezone to ensure unambiguous interpretation.
+Combined date and time represented as a fixed 10-byte binary value.
 
 ```
-"2024-03-15T14:30:00Z"           // UTC
-"2024-03-15T14:30:00.000Z"       // With milliseconds
-"2024-03-15T14:30:00+05:30"      // With timezone offset
-"2025-11-18T05:00:00.000Z"       // Full precision datetime
+DATETIME {
+  epoch_us: int64   // Microseconds since Unix epoch (1970-01-01T00:00:00Z)
+  offset_min: int16 // Signed UTC offset in minutes (e.g., +330 for +05:30)
+}
 ```
 
-**Wire format:** Length-prefixed UTF-8 string.
+**Wire format (NORMATIVE):** 10 bytes, fixed-width:
+- Bytes 0–7: `epoch_us` (signed 64-bit integer, little-endian)
+- Bytes 8–9: `offset_min` (signed 16-bit integer, little-endian)
 
-**Grammar (NORMATIVE):**
-```abnf
-datetime    = year-month-day "T" time timezone
-year-month-day = year "-" 2DIGIT "-" 2DIGIT
-year        = [sign] 4DIGIT
-time        = 2DIGIT ":" 2DIGIT ":" 2DIGIT [fraction]
-fraction    = "." 1*9DIGIT
-timezone    = "Z" / offset
-offset      = ("+" / "-") 2DIGIT ":" 2DIGIT
-            / ("+" / "-") 4DIGIT
-sign        = "+" / "-"
-```
+The `epoch_us` field represents the instant in UTC. The `offset_min` preserves the original timezone context for display purposes.
+
+**Examples:**
+- 2024-03-15T14:30:00Z: `epoch_us = 1710513000000000`, `offset_min = 0`
+- 2024-03-15T14:30:00+05:30: `epoch_us = 1710493200000000`, `offset_min = 330`
+
+**Why microseconds:** int64 microseconds provides a range of ±292,000 years with sub-millisecond precision. int64 nanoseconds would overflow around year 2262.
 
 **Validation (NORMATIVE):** Implementations MUST reject:
-- Month outside 1-12
-- Day outside valid range for the month (considering leap years)
-- Hours > 23, minutes > 59, seconds > 60
-- Missing timezone
-- Malformed structure (wrong separators, non-numeric components)
+- `offset_min` outside range [-1440, +1440] (±24 hours)
 
-**Sorting (NORMATIVE):** DATETIME values sort by their UTC-normalized instant. When two values represent the same instant, the value with more precision sorts first. Tie-break by byte comparison.
+**Sorting (NORMATIVE):** DATETIME values sort by `epoch_us` first, then by `offset_min` (both as signed integers).
 
 #### SCHEDULE
 
@@ -1153,7 +1134,9 @@ Decimal:
   if 0x01: len: varint, mantissa: bytes[len]
 Text: len: varint, data: UTF-8 bytes
 Bytes: len: varint, data: bytes
-Date: format: uint8, len: varint, data: UTF-8 bytes (ISO 8601)
+Date: days: int32 (LE), offset_min: int16 (LE) — 6 bytes total
+Time: time_us: int48 (LE), offset_min: int16 (LE) — 8 bytes total
+Datetime: epoch_us: int64 (LE), offset_min: int16 (LE) — 10 bytes total
 Schedule: len: varint, data: UTF-8 bytes (RFC 5545)
 Point: ordinate_count: uint8 (2 or 3), longitude: Float64, latitude: Float64, [altitude: Float64]
 Embedding:
@@ -1295,8 +1278,10 @@ Indexers MUST reject edits that fail structural validation:
 | BOOL values | Not 0x00 or 0x01 |
 | POINT bounds | Longitude outside [-180, +180] or latitude outside [-90, +90] |
 | POINT ordinate count | ordinate_count not 2 or 3 |
-| DATE format | Format/string mismatch, invalid month (>12), invalid day, invalid time components |
-| DATETIME timezone | Missing timezone |
+| DATE offset_min | Outside range [-1440, +1440] |
+| TIME time_us | Outside range [0, 86399999999] |
+| TIME offset_min | Outside range [-1440, +1440] |
+| DATETIME offset_min | Outside range [-1440, +1440] |
 | Position strings | Empty, characters outside `0-9A-Za-z`, or length > 64 |
 | EMBEDDING dims | Data length doesn't match dims × bytes-per-element for subtype |
 | Zstd decompression | Decompressed size doesn't match declared `uncompressed_size` |

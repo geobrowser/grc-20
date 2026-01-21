@@ -254,50 +254,72 @@ fn decode_bytes<'a>(reader: &mut Reader<'a>) -> Result<Value<'a>, DecodeError> {
 }
 
 fn decode_date<'a>(reader: &mut Reader<'a>) -> Result<Value<'a>, DecodeError> {
-    let value = reader.read_str(MAX_STRING_LEN, "date")?;
-    // Basic validation: DATE should not contain 'T' (that's DATETIME)
-    if value.contains('T') {
+    // DATE: 6 bytes (int32 days + int16 offset_min), little-endian
+    let bytes = reader.read_bytes(6, "date")?;
+    let days = i32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+    let offset_min = i16::from_le_bytes([bytes[4], bytes[5]]);
+
+    // Validate offset_min range
+    if offset_min < -1440 || offset_min > 1440 {
         return Err(DecodeError::MalformedEncoding {
-            context: "DATE should not contain 'T' separator (use DATETIME instead)",
+            context: "DATE offset_min outside range [-1440, +1440]",
         });
     }
-    Ok(Value::Date(Cow::Borrowed(value)))
+
+    Ok(Value::Date { days, offset_min })
 }
 
 fn decode_time<'a>(reader: &mut Reader<'a>) -> Result<Value<'a>, DecodeError> {
-    let value = reader.read_str(MAX_STRING_LEN, "time")?;
-    // Basic validation: TIME should have timezone (Z or +/- offset)
-    if !value.contains('Z') && !value.contains('+') && !value.rfind('-').map(|p| p >= 8).unwrap_or(false) {
+    // TIME: 8 bytes (int48 time_us + int16 offset_min), little-endian
+    let bytes = reader.read_bytes(8, "time")?;
+
+    // Read int48 as 6 bytes, sign-extend to i64
+    let time_us_unsigned = u64::from_le_bytes([
+        bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], 0, 0
+    ]);
+    // Sign-extend from 48 bits
+    let time_us = if time_us_unsigned & 0x8000_0000_0000 != 0 {
+        (time_us_unsigned | 0xFFFF_0000_0000_0000) as i64
+    } else {
+        time_us_unsigned as i64
+    };
+
+    let offset_min = i16::from_le_bytes([bytes[6], bytes[7]]);
+
+    // Validate time_us range
+    if time_us < 0 || time_us > 86_399_999_999 {
         return Err(DecodeError::MalformedEncoding {
-            context: "TIME must include timezone (Z or offset)",
+            context: "TIME time_us outside range [0, 86399999999]",
         });
     }
-    Ok(Value::Time(Cow::Borrowed(value)))
+
+    // Validate offset_min range
+    if offset_min < -1440 || offset_min > 1440 {
+        return Err(DecodeError::MalformedEncoding {
+            context: "TIME offset_min outside range [-1440, +1440]",
+        });
+    }
+
+    Ok(Value::Time { time_us, offset_min })
 }
 
 fn decode_datetime<'a>(reader: &mut Reader<'a>) -> Result<Value<'a>, DecodeError> {
-    let value = reader.read_str(MAX_STRING_LEN, "datetime")?;
-    // Basic validation: DATETIME should contain 'T'
-    if !value.contains('T') {
+    // DATETIME: 10 bytes (int64 epoch_us + int16 offset_min), little-endian
+    let bytes = reader.read_bytes(10, "datetime")?;
+    let epoch_us = i64::from_le_bytes([
+        bytes[0], bytes[1], bytes[2], bytes[3],
+        bytes[4], bytes[5], bytes[6], bytes[7]
+    ]);
+    let offset_min = i16::from_le_bytes([bytes[8], bytes[9]]);
+
+    // Validate offset_min range
+    if offset_min < -1440 || offset_min > 1440 {
         return Err(DecodeError::MalformedEncoding {
-            context: "DATETIME must contain 'T' separator",
+            context: "DATETIME offset_min outside range [-1440, +1440]",
         });
     }
-    // DATETIME must include timezone (Z or offset)
-    // For datetime strings, timezone appears after 'T', so check for:
-    // - 'Z' anywhere (UTC)
-    // - '+' anywhere (positive offset like +05:30)
-    // - '-' after the 'T' position (negative offset like -05:00)
-    let t_pos = value.find('T').unwrap(); // Safe: we just checked for 'T'
-    let has_timezone = value.contains('Z')
-        || value.contains('+')
-        || value[t_pos..].contains('-');
-    if !has_timezone {
-        return Err(DecodeError::MalformedEncoding {
-            context: "DATETIME must include timezone (Z or offset)",
-        });
-    }
-    Ok(Value::Datetime(Cow::Borrowed(value)))
+
+    Ok(Value::Datetime { epoch_us, offset_min })
 }
 
 fn decode_schedule<'a>(reader: &mut Reader<'a>) -> Result<Value<'a>, DecodeError> {
@@ -454,42 +476,46 @@ pub fn encode_value(
         Value::Bytes(bytes) => {
             writer.write_bytes_prefixed(bytes);
         }
-        Value::Date(value) => {
-            // DATE should not contain 'T' (that's DATETIME)
-            if value.contains('T') {
-                return Err(EncodeError::InvalidDate {
-                    reason: "DATE should not contain 'T' separator (use DATETIME instead)",
+        Value::Date { days, offset_min } => {
+            // Validate offset_min range
+            if *offset_min < -1440 || *offset_min > 1440 {
+                return Err(EncodeError::InvalidInput {
+                    context: "DATE offset_min outside range [-1440, +1440]",
                 });
             }
-            writer.write_string(value);
+            // DATE: 6 bytes (int32 days + int16 offset_min), little-endian
+            writer.write_bytes(&days.to_le_bytes());
+            writer.write_bytes(&offset_min.to_le_bytes());
         }
-        Value::Time(value) => {
-            // TIME must have timezone
-            if !value.contains('Z') && !value.contains('+') && !value.rfind('-').map(|p| p >= 8).unwrap_or(false) {
+        Value::Time { time_us, offset_min } => {
+            // Validate time_us range
+            if *time_us < 0 || *time_us > 86_399_999_999 {
                 return Err(EncodeError::InvalidInput {
-                    context: "TIME must include timezone (Z or offset)",
+                    context: "TIME time_us outside range [0, 86399999999]",
                 });
             }
-            writer.write_string(value);
+            // Validate offset_min range
+            if *offset_min < -1440 || *offset_min > 1440 {
+                return Err(EncodeError::InvalidInput {
+                    context: "TIME offset_min outside range [-1440, +1440]",
+                });
+            }
+            // TIME: 8 bytes (int48 time_us + int16 offset_min), little-endian
+            // Write int48 as 6 bytes
+            let time_bytes = time_us.to_le_bytes();
+            writer.write_bytes(&time_bytes[0..6]);
+            writer.write_bytes(&offset_min.to_le_bytes());
         }
-        Value::Datetime(value) => {
-            // DATETIME must contain 'T'
-            if !value.contains('T') {
+        Value::Datetime { epoch_us, offset_min } => {
+            // Validate offset_min range
+            if *offset_min < -1440 || *offset_min > 1440 {
                 return Err(EncodeError::InvalidInput {
-                    context: "DATETIME must contain 'T' separator",
+                    context: "DATETIME offset_min outside range [-1440, +1440]",
                 });
             }
-            // DATETIME must include timezone (Z or offset)
-            let t_pos = value.find('T').unwrap(); // Safe: we just checked for 'T'
-            let has_timezone = value.contains('Z')
-                || value.contains('+')
-                || value[t_pos..].contains('-');
-            if !has_timezone {
-                return Err(EncodeError::InvalidInput {
-                    context: "DATETIME must include timezone (Z or offset)",
-                });
-            }
-            writer.write_string(value);
+            // DATETIME: 10 bytes (int64 epoch_us + int16 offset_min), little-endian
+            writer.write_bytes(&epoch_us.to_le_bytes());
+            writer.write_bytes(&offset_min.to_le_bytes());
         }
         Value::Schedule(s) => {
             // RFC 5545 iCalendar format
@@ -841,17 +867,18 @@ mod tests {
         let dicts = WireDictionaries::default();
         let mut dict_builder = DictionaryBuilder::new();
 
-        // Test various date formats
+        // Test various date values
         let test_cases = [
-            "2024",
-            "2024-03",
-            "2024-03-15",
-            "-0100",
-            "-0100-03-15",
+            (0, 0),           // Unix epoch, UTC
+            (19797, 0),       // March 15, 2024 UTC
+            (19797, 330),     // March 15, 2024 +05:30
+            (-36524, 0),      // 100 BCE
+            (i32::MAX, 0),    // Far future
+            (i32::MIN, 0),    // Far past
         ];
 
-        for date_str in test_cases {
-            let value = Value::Date(Cow::Owned(date_str.to_string()));
+        for (days, offset_min) in test_cases {
+            let value = Value::Date { days, offset_min };
 
             let mut writer = Writer::new();
             encode_value(&mut writer, &value, &mut dict_builder).unwrap();
@@ -859,12 +886,7 @@ mod tests {
             let mut reader = Reader::new(writer.as_bytes());
             let decoded = decode_value(&mut reader, DataType::Date, &dicts).unwrap();
 
-            match (&value, &decoded) {
-                (Value::Date(v1), Value::Date(v2)) => {
-                    assert_eq!(v1.as_ref(), v2.as_ref());
-                }
-                _ => panic!("expected Date values"),
-            }
+            assert_eq!(value, decoded);
         }
     }
 
@@ -873,16 +895,17 @@ mod tests {
         let dicts = WireDictionaries::default();
         let mut dict_builder = DictionaryBuilder::new();
 
-        // Test various time formats (all with timezone)
+        // Test various time values
         let test_cases = [
-            "14:30:00Z",
-            "14:30:00.000Z",
-            "14:30:00+05:30",
-            "00:00:00Z",
+            (0, 0),                      // Midnight UTC
+            (52_200_000_000, 0),         // 14:30:00 UTC
+            (52_200_500_000, 330),       // 14:30:00.500 +05:30
+            (86_399_999_999, 0),         // 23:59:59.999999 UTC
+            (0, -300),                   // Midnight -05:00
         ];
 
-        for time_str in test_cases {
-            let value = Value::Time(Cow::Owned(time_str.to_string()));
+        for (time_us, offset_min) in test_cases {
+            let value = Value::Time { time_us, offset_min };
 
             let mut writer = Writer::new();
             encode_value(&mut writer, &value, &mut dict_builder).unwrap();
@@ -890,12 +913,7 @@ mod tests {
             let mut reader = Reader::new(writer.as_bytes());
             let decoded = decode_value(&mut reader, DataType::Time, &dicts).unwrap();
 
-            match (&value, &decoded) {
-                (Value::Time(v1), Value::Time(v2)) => {
-                    assert_eq!(v1.as_ref(), v2.as_ref());
-                }
-                _ => panic!("expected Time values"),
-            }
+            assert_eq!(value, decoded);
         }
     }
 
@@ -904,17 +922,17 @@ mod tests {
         let dicts = WireDictionaries::default();
         let mut dict_builder = DictionaryBuilder::new();
 
-        // Test various datetime formats (all with timezone)
+        // Test various datetime values
         let test_cases = [
-            "2024-03-15T14:30:00Z",
-            "2024-03-15T14:30:00.000Z",
-            "2024-03-15T14:30:00+05:30",
-            "2024-03-15T14:30:00-05:00",
-            "2025-11-18T05:00:00.000Z",
+            (0, 0),                          // Unix epoch UTC
+            (1_710_513_000_000_000, 0),      // 2024-03-15T14:30:00Z
+            (1_710_493_200_000_000, 330),    // 2024-03-15T14:30:00+05:30
+            (-1_000_000_000_000, 0),         // Before epoch
+            (i64::MAX / 2, 0),               // Far future (within safe range)
         ];
 
-        for dt_str in test_cases {
-            let value = Value::Datetime(Cow::Owned(dt_str.to_string()));
+        for (epoch_us, offset_min) in test_cases {
+            let value = Value::Datetime { epoch_us, offset_min };
 
             let mut writer = Writer::new();
             encode_value(&mut writer, &value, &mut dict_builder).unwrap();
@@ -922,12 +940,7 @@ mod tests {
             let mut reader = Reader::new(writer.as_bytes());
             let decoded = decode_value(&mut reader, DataType::Datetime, &dicts).unwrap();
 
-            match (&value, &decoded) {
-                (Value::Datetime(v1), Value::Datetime(v2)) => {
-                    assert_eq!(v1.as_ref(), v2.as_ref());
-                }
-                _ => panic!("expected Datetime values"),
-            }
+            assert_eq!(value, decoded);
         }
     }
 
@@ -935,35 +948,47 @@ mod tests {
     fn test_date_validation() {
         let mut dict_builder = DictionaryBuilder::new();
 
-        // DATE should reject strings with 'T'
-        let invalid = Value::Date(Cow::Borrowed("2024-03-15T14:30:00Z"));
+        // DATE should reject offset_min outside range
+        let invalid = Value::Date { days: 0, offset_min: 1500 };
         let mut writer = Writer::new();
         assert!(encode_value(&mut writer, &invalid, &mut dict_builder).is_err());
+
+        let invalid_neg = Value::Date { days: 0, offset_min: -1500 };
+        let mut writer = Writer::new();
+        assert!(encode_value(&mut writer, &invalid_neg, &mut dict_builder).is_err());
     }
 
     #[test]
     fn test_time_validation() {
         let mut dict_builder = DictionaryBuilder::new();
 
-        // TIME should reject strings without timezone
-        let invalid = Value::Time(Cow::Borrowed("14:30:00"));
+        // TIME should reject time_us outside range
+        let invalid_high = Value::Time { time_us: 86_400_000_000, offset_min: 0 };
         let mut writer = Writer::new();
-        assert!(encode_value(&mut writer, &invalid, &mut dict_builder).is_err());
+        assert!(encode_value(&mut writer, &invalid_high, &mut dict_builder).is_err());
+
+        let invalid_neg = Value::Time { time_us: -1, offset_min: 0 };
+        let mut writer = Writer::new();
+        assert!(encode_value(&mut writer, &invalid_neg, &mut dict_builder).is_err());
+
+        // TIME should reject offset_min outside range
+        let invalid_offset = Value::Time { time_us: 0, offset_min: 1500 };
+        let mut writer = Writer::new();
+        assert!(encode_value(&mut writer, &invalid_offset, &mut dict_builder).is_err());
     }
 
     #[test]
     fn test_datetime_validation() {
         let mut dict_builder = DictionaryBuilder::new();
 
-        // DATETIME should reject strings without 'T'
-        let invalid = Value::Datetime(Cow::Borrowed("2024-03-15"));
+        // DATETIME should reject offset_min outside range
+        let invalid = Value::Datetime { epoch_us: 0, offset_min: 1500 };
         let mut writer = Writer::new();
         assert!(encode_value(&mut writer, &invalid, &mut dict_builder).is_err());
 
-        // DATETIME should reject strings without timezone
-        let invalid_no_tz = Value::Datetime(Cow::Borrowed("2024-03-15T14:30:00"));
+        let invalid_neg = Value::Datetime { epoch_us: 0, offset_min: -1500 };
         let mut writer = Writer::new();
-        assert!(encode_value(&mut writer, &invalid_no_tz, &mut dict_builder).is_err());
+        assert!(encode_value(&mut writer, &invalid_neg, &mut dict_builder).is_err());
     }
 
     #[test]
@@ -1041,81 +1066,4 @@ mod tests {
         assert!(encode_value(&mut writer, &valid_zero, &mut dict_builder).is_ok());
     }
 
-    #[test]
-    fn test_date_helpers() {
-        // Test extracting date part from datetime
-        assert_eq!(extract_date_part("2024-03-15T14:30:00Z"), "2024-03-15");
-        assert_eq!(extract_date_part("2024-03-15T00:00:00.000Z"), "2024-03-15");
-        assert_eq!(extract_date_part("2025-11-18T05:00:00.000Z"), "2025-11-18");
-        assert_eq!(extract_date_part("2024-03-15"), "2024-03-15");
-        assert_eq!(extract_date_part("2024-03"), "2024-03");
-        assert_eq!(extract_date_part("2024"), "2024");
-
-        // Test converting date to datetime
-        assert_eq!(date_to_datetime("2024-03-15"), "2024-03-15T00:00:00.000Z");
-        assert_eq!(date_to_datetime("2024-03"), "2024-03-01T00:00:00.000Z");
-        assert_eq!(date_to_datetime("2024"), "2024-01-01T00:00:00.000Z");
-        // Datetime should pass through unchanged
-        assert_eq!(date_to_datetime("2024-03-15T14:30:00Z"), "2024-03-15T14:30:00Z");
-    }
-}
-
-// =============================================================================
-// DATE HELPERS
-// =============================================================================
-
-/// Extracts the date part from an ISO 8601 date or datetime string.
-///
-/// Examples:
-/// - "2024-03-15T14:30:00Z" -> "2024-03-15"
-/// - "2024-03-15" -> "2024-03-15"
-/// - "2024-03" -> "2024-03"
-/// - "2024" -> "2024"
-pub fn extract_date_part(s: &str) -> &str {
-    if let Some(t_pos) = s.find('T') {
-        &s[..t_pos]
-    } else {
-        s
-    }
-}
-
-/// Converts an ISO 8601 date string to a full datetime string at midnight UTC.
-///
-/// If the input already contains a time component, returns it unchanged.
-///
-/// Examples:
-/// - "2024-03-15" -> "2024-03-15T00:00:00.000Z"
-/// - "2024-03" -> "2024-03-01T00:00:00.000Z"
-/// - "2024" -> "2024-01-01T00:00:00.000Z"
-/// - "2024-03-15T14:30:00Z" -> "2024-03-15T14:30:00Z" (unchanged)
-pub fn date_to_datetime(s: &str) -> String {
-    // If already has time component, return as-is
-    if s.contains('T') {
-        return s.to_string();
-    }
-
-    // Handle BCE dates (with leading -)
-    let (prefix, date_part) = if let Some(rest) = s.strip_prefix('-') {
-        ("-", rest)
-    } else {
-        ("", s)
-    };
-
-    let parts: Vec<&str> = date_part.split('-').collect();
-
-    match parts.len() {
-        1 => {
-            // Year only -> YYYY-01-01T00:00:00.000Z
-            format!("{}{}-01-01T00:00:00.000Z", prefix, parts[0])
-        }
-        2 => {
-            // Year-month -> YYYY-MM-01T00:00:00.000Z
-            format!("{}{}-{}-01T00:00:00.000Z", prefix, parts[0], parts[1])
-        }
-        3 => {
-            // Full date -> YYYY-MM-DDT00:00:00.000Z
-            format!("{}{}-{}-{}T00:00:00.000Z", prefix, parts[0], parts[1], parts[2])
-        }
-        _ => s.to_string(), // Invalid, return as-is
-    }
 }

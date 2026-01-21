@@ -63,20 +63,25 @@ assert_eq!(edit.id, decoded.id);
 
 All 12 GRC-20 data types are supported:
 
-| Type | Rust Representation |
-|------|---------------------|
-| BOOL | `Value::Bool(bool)` |
-| INT64 | `Value::Int64 { value, unit }` |
-| FLOAT64 | `Value::Float64 { value, unit }` |
-| DECIMAL | `Value::Decimal { exponent, mantissa, unit }` |
-| TEXT | `Value::Text { value, language }` |
-| BYTES | `Value::Bytes(Vec<u8>)` |
-| DATE | `Value::Date(String)` (ISO 8601) |
-| TIME | `Value::Time(String)` (HH:MM:SS with optional timezone) |
-| DATETIME | `Value::DateTime(String)` (ISO 8601 with timezone) |
-| SCHEDULE | `Value::Schedule(String)` (cron-like recurring) |
-| POINT | `Value::Point { lat, lon }` |
-| EMBEDDING | `Value::Embedding { sub_type, dims, data }` |
+| Type | Rust Representation | Wire Size |
+|------|---------------------|-----------|
+| BOOL | `Value::Bool(bool)` | 1 byte |
+| INT64 | `Value::Int64 { value, unit }` | varint |
+| FLOAT64 | `Value::Float64 { value, unit }` | 8 bytes |
+| DECIMAL | `Value::Decimal { exponent, mantissa, unit }` | variable |
+| TEXT | `Value::Text { value, language }` | variable |
+| BYTES | `Value::Bytes(Vec<u8>)` | variable |
+| DATE | `Value::Date { days, offset_min }` | 6 bytes |
+| TIME | `Value::Time { time_us, offset_min }` | 8 bytes |
+| DATETIME | `Value::Datetime { epoch_us, offset_min }` | 10 bytes |
+| SCHEDULE | `Value::Schedule(String)` | variable |
+| POINT | `Value::Point { lon, lat, alt }` | 17-25 bytes |
+| EMBEDDING | `Value::Embedding { sub_type, dims, data }` | variable |
+
+**Temporal types use fixed-width binary encoding:**
+- `DATE`: `days` (i32, days since 1970-01-01) + `offset_min` (i16, UTC offset in minutes)
+- `TIME`: `time_us` (i48, microseconds since midnight) + `offset_min` (i16)
+- `DATETIME`: `epoch_us` (i64, microseconds since Unix epoch) + `offset_min` (i16)
 
 ### Operations
 

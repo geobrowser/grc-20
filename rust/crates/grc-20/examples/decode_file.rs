@@ -24,9 +24,9 @@ fn format_value(v: &Value) -> String {
         Value::Int64 { value, .. } => format!("{}", value),
         Value::Float64 { value, .. } => format!("{:.6}", value),
         Value::Bool(b) => format!("{}", b),
-        Value::Date(s) => format!("DATE({})", s),
-        Value::Time(s) => format!("TIME({})", s),
-        Value::Datetime(s) => format!("DATETIME({})", s),
+        Value::Date { days, offset_min } => format!("DATE(days={}, offset={})", days, offset_min),
+        Value::Time { time_us, offset_min } => format!("TIME(time_us={}, offset={})", time_us, offset_min),
+        Value::Datetime { epoch_us, offset_min } => format!("DATETIME(epoch_us={}, offset={})", epoch_us, offset_min),
         Value::Schedule(s) => format!("SCHEDULE({})", s),
         Value::Point { lon, lat, alt } => {
             if let Some(a) = alt {

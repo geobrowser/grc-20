@@ -149,14 +149,29 @@ pub enum Value<'a> {
     /// Opaque byte array.
     Bytes(Cow<'a, [u8]>),
 
-    /// ISO 8601 date string (YYYY, YYYY-MM, or YYYY-MM-DD).
-    Date(Cow<'a, str>),
+    /// Calendar date (6 bytes: int32 days + int16 offset_min).
+    Date {
+        /// Signed days since Unix epoch (1970-01-01).
+        days: i32,
+        /// Signed UTC offset in minutes (e.g., +330 for +05:30).
+        offset_min: i16,
+    },
 
-    /// ISO 8601 time string with timezone (HH:MM:SS[.frac]TZ).
-    Time(Cow<'a, str>),
+    /// Time of day (8 bytes: int48 time_us + int16 offset_min).
+    Time {
+        /// Microseconds since midnight (0 to 86,399,999,999).
+        time_us: i64,
+        /// Signed UTC offset in minutes (e.g., +330 for +05:30).
+        offset_min: i16,
+    },
 
-    /// ISO 8601 datetime string (YYYY-MM-DDTHH:MM:SS[.frac][TZ]).
-    Datetime(Cow<'a, str>),
+    /// Combined date and time (10 bytes: int64 epoch_us + int16 offset_min).
+    Datetime {
+        /// Microseconds since Unix epoch (1970-01-01T00:00:00Z).
+        epoch_us: i64,
+        /// Signed UTC offset in minutes (e.g., +330 for +05:30).
+        offset_min: i16,
+    },
 
     /// RFC 5545 iCalendar schedule string.
     Schedule(Cow<'a, str>),
@@ -190,9 +205,9 @@ impl Value<'_> {
             Value::Decimal { .. } => DataType::Decimal,
             Value::Text { .. } => DataType::Text,
             Value::Bytes(_) => DataType::Bytes,
-            Value::Date(_) => DataType::Date,
-            Value::Time(_) => DataType::Time,
-            Value::Datetime(_) => DataType::Datetime,
+            Value::Date { .. } => DataType::Date,
+            Value::Time { .. } => DataType::Time,
+            Value::Datetime { .. } => DataType::Datetime,
             Value::Schedule(_) => DataType::Schedule,
             Value::Point { .. } => DataType::Point,
             Value::Embedding { .. } => DataType::Embedding,
@@ -233,6 +248,24 @@ impl Value<'_> {
                     if a.is_nan() {
                         return Some("NaN is not allowed in Point altitude");
                     }
+                }
+            }
+            Value::Date { offset_min, .. } => {
+                if *offset_min < -1440 || *offset_min > 1440 {
+                    return Some("DATE offset_min outside range [-1440, +1440]");
+                }
+            }
+            Value::Time { time_us, offset_min } => {
+                if *time_us < 0 || *time_us > 86_399_999_999 {
+                    return Some("TIME time_us outside range [0, 86399999999]");
+                }
+                if *offset_min < -1440 || *offset_min > 1440 {
+                    return Some("TIME offset_min outside range [-1440, +1440]");
+                }
+            }
+            Value::Datetime { offset_min, .. } => {
+                if *offset_min < -1440 || *offset_min > 1440 {
+                    return Some("DATETIME offset_min outside range [-1440, +1440]");
                 }
             }
             Value::Embedding {

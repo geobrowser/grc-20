@@ -145,6 +145,51 @@ export class Writer {
       this.writeId(id);
     }
   }
+
+  /**
+   * Writes a 32-bit signed integer (little-endian).
+   */
+  writeInt32LE(value: number): void {
+    this.ensureCapacity(4);
+    const view = new DataView(this.buffer.buffer, this.buffer.byteOffset + this.pos, 4);
+    view.setInt32(0, value, true);
+    this.pos += 4;
+  }
+
+  /**
+   * Writes a 16-bit signed integer (little-endian).
+   */
+  writeInt16LE(value: number): void {
+    this.ensureCapacity(2);
+    const view = new DataView(this.buffer.buffer, this.buffer.byteOffset + this.pos, 2);
+    view.setInt16(0, value, true);
+    this.pos += 2;
+  }
+
+  /**
+   * Writes a 64-bit signed integer (little-endian).
+   */
+  writeInt64LE(value: bigint): void {
+    this.ensureCapacity(8);
+    const view = new DataView(this.buffer.buffer, this.buffer.byteOffset + this.pos, 8);
+    view.setBigInt64(0, value, true);
+    this.pos += 8;
+  }
+
+  /**
+   * Writes a 48-bit signed integer (little-endian) using 6 bytes.
+   * Values outside the 48-bit signed range will be truncated.
+   */
+  writeInt48LE(value: bigint): void {
+    this.ensureCapacity(6);
+    // Write as 64-bit then take only the low 6 bytes
+    const tempBuffer = new ArrayBuffer(8);
+    const view = new DataView(tempBuffer);
+    view.setBigInt64(0, value, true);
+    const bytes = new Uint8Array(tempBuffer);
+    this.buffer.set(bytes.subarray(0, 6), this.pos);
+    this.pos += 6;
+  }
 }
 
 /**
@@ -320,5 +365,50 @@ export class Reader {
       ids.push(this.readId());
     }
     return ids;
+  }
+
+  /**
+   * Reads a 32-bit signed integer (little-endian).
+   */
+  readInt32LE(): number {
+    const bytes = this.readBytes(4);
+    const view = new DataView(bytes.buffer, bytes.byteOffset, 4);
+    return view.getInt32(0, true);
+  }
+
+  /**
+   * Reads a 16-bit signed integer (little-endian).
+   */
+  readInt16LE(): number {
+    const bytes = this.readBytes(2);
+    const view = new DataView(bytes.buffer, bytes.byteOffset, 2);
+    return view.getInt16(0, true);
+  }
+
+  /**
+   * Reads a 64-bit signed integer (little-endian).
+   */
+  readInt64LE(): bigint {
+    const bytes = this.readBytes(8);
+    const view = new DataView(bytes.buffer, bytes.byteOffset, 8);
+    return view.getBigInt64(0, true);
+  }
+
+  /**
+   * Reads a 48-bit signed integer (little-endian) from 6 bytes.
+   */
+  readInt48LE(): bigint {
+    const bytes = this.readBytes(6);
+    // Extend to 8 bytes for reading as int64, then sign-extend from 48 bits
+    const tempBuffer = new ArrayBuffer(8);
+    const tempBytes = new Uint8Array(tempBuffer);
+    tempBytes.set(bytes, 0);
+    // Sign-extend: if bit 47 is set, fill high bytes with 0xFF
+    if (bytes[5] & 0x80) {
+      tempBytes[6] = 0xff;
+      tempBytes[7] = 0xff;
+    }
+    const view = new DataView(tempBuffer);
+    return view.getBigInt64(0, true);
   }
 }

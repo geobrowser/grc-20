@@ -339,29 +339,41 @@ impl<'a> EntityBuilder<'a> {
         self
     }
 
-    /// Adds a DATE value (ISO 8601 date string).
-    pub fn date(mut self, property: Id, value: impl Into<Cow<'a, str>>) -> Self {
+    /// Adds a DATE value.
+    ///
+    /// # Arguments
+    /// * `days` - Signed days since Unix epoch (1970-01-01)
+    /// * `offset_min` - Signed UTC offset in minutes (e.g., +330 for +05:30)
+    pub fn date(mut self, property: Id, days: i32, offset_min: i16) -> Self {
         self.values.push(PropertyValue {
             property,
-            value: Value::Date(value.into()),
+            value: Value::Date { days, offset_min },
         });
         self
     }
 
-    /// Adds a TIME value (ISO 8601 time string with timezone).
-    pub fn time(mut self, property: Id, value: impl Into<Cow<'a, str>>) -> Self {
+    /// Adds a TIME value.
+    ///
+    /// # Arguments
+    /// * `time_us` - Microseconds since midnight (0 to 86,399,999,999)
+    /// * `offset_min` - Signed UTC offset in minutes (e.g., +330 for +05:30)
+    pub fn time(mut self, property: Id, time_us: i64, offset_min: i16) -> Self {
         self.values.push(PropertyValue {
             property,
-            value: Value::Time(value.into()),
+            value: Value::Time { time_us, offset_min },
         });
         self
     }
 
-    /// Adds a DATETIME value (ISO 8601 datetime string).
-    pub fn datetime(mut self, property: Id, value: impl Into<Cow<'a, str>>) -> Self {
+    /// Adds a DATETIME value.
+    ///
+    /// # Arguments
+    /// * `epoch_us` - Microseconds since Unix epoch (1970-01-01T00:00:00Z)
+    /// * `offset_min` - Signed UTC offset in minutes (e.g., +330 for +05:30)
+    pub fn datetime(mut self, property: Id, epoch_us: i64, offset_min: i16) -> Self {
         self.values.push(PropertyValue {
             property,
-            value: Value::Datetime(value.into()),
+            value: Value::Datetime { epoch_us, offset_min },
         });
         self
     }
@@ -487,29 +499,41 @@ impl<'a> UpdateEntityBuilder<'a> {
         self
     }
 
-    /// Sets a DATE value (ISO 8601 date string).
-    pub fn set_date(mut self, property: Id, value: impl Into<Cow<'a, str>>) -> Self {
+    /// Sets a DATE value.
+    ///
+    /// # Arguments
+    /// * `days` - Signed days since Unix epoch (1970-01-01)
+    /// * `offset_min` - Signed UTC offset in minutes (e.g., +330 for +05:30)
+    pub fn set_date(mut self, property: Id, days: i32, offset_min: i16) -> Self {
         self.set_properties.push(PropertyValue {
             property,
-            value: Value::Date(value.into()),
+            value: Value::Date { days, offset_min },
         });
         self
     }
 
-    /// Sets a TIME value (ISO 8601 time string with timezone).
-    pub fn set_time(mut self, property: Id, value: impl Into<Cow<'a, str>>) -> Self {
+    /// Sets a TIME value.
+    ///
+    /// # Arguments
+    /// * `time_us` - Microseconds since midnight (0 to 86,399,999,999)
+    /// * `offset_min` - Signed UTC offset in minutes (e.g., +330 for +05:30)
+    pub fn set_time(mut self, property: Id, time_us: i64, offset_min: i16) -> Self {
         self.set_properties.push(PropertyValue {
             property,
-            value: Value::Time(value.into()),
+            value: Value::Time { time_us, offset_min },
         });
         self
     }
 
-    /// Sets a DATETIME value (ISO 8601 datetime string).
-    pub fn set_datetime(mut self, property: Id, value: impl Into<Cow<'a, str>>) -> Self {
+    /// Sets a DATETIME value.
+    ///
+    /// # Arguments
+    /// * `epoch_us` - Microseconds since Unix epoch (1970-01-01T00:00:00Z)
+    /// * `offset_min` - Signed UTC offset in minutes (e.g., +330 for +05:30)
+    pub fn set_datetime(mut self, property: Id, epoch_us: i64, offset_min: i16) -> Self {
         self.set_properties.push(PropertyValue {
             property,
-            value: Value::Datetime(value.into()),
+            value: Value::Datetime { epoch_us, offset_min },
         });
         self
     }
@@ -923,7 +947,7 @@ mod tests {
                     .float64([4u8; 16], 3.14, None)
                     .bool([5u8; 16], true)
                     .point([6u8; 16], -74.0060, 40.7128, None)
-                    .date([7u8; 16], "2024-01-15")
+                    .date([7u8; 16], 19738, 0) // 2024-01-15 UTC
                     .schedule([8u8; 16], "BEGIN:VEVENT\r\nDTSTART:20240315T090000Z\r\nEND:VEVENT")
                     .bytes([9u8; 16], vec![1, 2, 3, 4])
             })

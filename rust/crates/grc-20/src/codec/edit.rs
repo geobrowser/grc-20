@@ -326,9 +326,9 @@ fn value_to_owned(v: crate::model::Value<'_>) -> crate::model::Value<'static> {
             language,
         },
         Value::Bytes(b) => Value::Bytes(Cow::Owned(b.into_owned())),
-        Value::Date(s) => Value::Date(Cow::Owned(s.into_owned())),
-        Value::Time(s) => Value::Time(Cow::Owned(s.into_owned())),
-        Value::Datetime(s) => Value::Datetime(Cow::Owned(s.into_owned())),
+        Value::Date { days, offset_min } => Value::Date { days, offset_min },
+        Value::Time { time_us, offset_min } => Value::Time { time_us, offset_min },
+        Value::Datetime { epoch_us, offset_min } => Value::Datetime { epoch_us, offset_min },
         Value::Schedule(s) => Value::Schedule(Cow::Owned(s.into_owned())),
         Value::Point { lon, lat, alt } => Value::Point { lon, lat, alt },
         Value::Embedding { sub_type, dims, data } => Value::Embedding {

@@ -119,9 +119,9 @@ const edit = new EditBuilder(editId)
     .bool(propId, true)
     .bytes(propId, new Uint8Array([1, 2, 3]))
     .point(propId, 40.7128, -74.006)
-    .date(propId, "2024-01-15")
-    .time(propId, "10:30:00")
-    .datetime(propId, "2024-01-15T10:30:00Z")
+    .date(propId, 19738, 0)                  // days since epoch, offset in minutes
+    .time(propId, 37800000000n, 0)           // microseconds since midnight, offset
+    .datetime(propId, 1705312200000000n, 0)  // microseconds since epoch, offset
   )
   .updateEntity(entityId, u => u
     .setText(propId, "new value", undefined)

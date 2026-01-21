@@ -55,39 +55,38 @@ export function encodeValuePayload(writer: Writer, value: Value): void {
       break;
 
     case "date":
-      // DATE should not contain 'T' (that's datetime)
-      if (value.value.includes("T")) {
-        throw new Error("DATE should not contain 'T' separator (use datetime instead)");
+      // Validate offset_min range
+      if (value.offsetMin < -1440 || value.offsetMin > 1440) {
+        throw new Error("DATE offsetMin outside range [-1440, +1440]");
       }
-      writer.writeString(value.value);
+      // DATE: 6 bytes (int32 days + int16 offset_min), little-endian
+      writer.writeInt32LE(value.days);
+      writer.writeInt16LE(value.offsetMin);
       break;
 
     case "time":
-      // TIME must have timezone
-      if (!value.value.includes("Z") && !value.value.includes("+") &&
-          !(value.value.lastIndexOf("-") >= 8)) {
-        throw new Error("TIME must include timezone (Z or offset)");
+      // Validate time_us range
+      if (value.timeUs < 0n || value.timeUs > 86_399_999_999n) {
+        throw new Error("TIME timeUs outside range [0, 86399999999]");
       }
-      writer.writeString(value.value);
+      // Validate offset_min range
+      if (value.offsetMin < -1440 || value.offsetMin > 1440) {
+        throw new Error("TIME offsetMin outside range [-1440, +1440]");
+      }
+      // TIME: 8 bytes (int48 time_us + int16 offset_min), little-endian
+      writer.writeInt48LE(value.timeUs);
+      writer.writeInt16LE(value.offsetMin);
       break;
 
-    case "datetime": {
-      // DATETIME must contain 'T'
-      if (!value.value.includes("T")) {
-        throw new Error("DATETIME must contain 'T' separator");
+    case "datetime":
+      // Validate offset_min range
+      if (value.offsetMin < -1440 || value.offsetMin > 1440) {
+        throw new Error("DATETIME offsetMin outside range [-1440, +1440]");
       }
-      // DATETIME must include timezone (Z or offset)
-      const tPos = value.value.indexOf("T");
-      const hasTimezone =
-        value.value.includes("Z") ||
-        value.value.includes("+") ||
-        value.value.slice(tPos).includes("-");
-      if (!hasTimezone) {
-        throw new Error("DATETIME must include timezone (Z or offset)");
-      }
-      writer.writeString(value.value);
+      // DATETIME: 10 bytes (int64 epoch_us + int16 offset_min), little-endian
+      writer.writeInt64LE(value.epochUs);
+      writer.writeInt16LE(value.offsetMin);
       break;
-    }
 
     case "schedule":
       writer.writeString(value.value);
@@ -224,40 +223,40 @@ export function decodeValuePayload(reader: Reader, dataType: DataType): Value {
     }
 
     case DataType.Date: {
-      const value = reader.readString();
-      // Basic validation: DATE should not contain 'T'
-      if (value.includes("T")) {
-        throw new DecodeError("E005", "DATE should not contain 'T' separator (use DATETIME instead)");
+      // DATE: 6 bytes (int32 days + int16 offset_min), little-endian
+      const days = reader.readInt32LE();
+      const offsetMin = reader.readInt16LE();
+      // Validate offset_min range
+      if (offsetMin < -1440 || offsetMin > 1440) {
+        throw new DecodeError("E005", "DATE offsetMin outside range [-1440, +1440]");
       }
-      return { type: "date", value };
+      return { type: "date", days, offsetMin };
     }
 
     case DataType.Time: {
-      const value = reader.readString();
-      // Basic validation: TIME should have timezone
-      if (!value.includes("Z") && !value.includes("+") &&
-          !(value.lastIndexOf("-") >= 8)) {
-        throw new DecodeError("E005", "TIME must include timezone (Z or offset)");
+      // TIME: 8 bytes (int48 time_us + int16 offset_min), little-endian
+      const timeUs = reader.readInt48LE();
+      const offsetMin = reader.readInt16LE();
+      // Validate time_us range
+      if (timeUs < 0n || timeUs > 86_399_999_999n) {
+        throw new DecodeError("E005", "TIME timeUs outside range [0, 86399999999]");
       }
-      return { type: "time", value };
+      // Validate offset_min range
+      if (offsetMin < -1440 || offsetMin > 1440) {
+        throw new DecodeError("E005", "TIME offsetMin outside range [-1440, +1440]");
+      }
+      return { type: "time", timeUs, offsetMin };
     }
 
     case DataType.Datetime: {
-      const value = reader.readString();
-      // Basic validation: DATETIME should contain 'T'
-      if (!value.includes("T")) {
-        throw new DecodeError("E005", "DATETIME must contain 'T' separator");
+      // DATETIME: 10 bytes (int64 epoch_us + int16 offset_min), little-endian
+      const epochUs = reader.readInt64LE();
+      const offsetMin = reader.readInt16LE();
+      // Validate offset_min range
+      if (offsetMin < -1440 || offsetMin > 1440) {
+        throw new DecodeError("E005", "DATETIME offsetMin outside range [-1440, +1440]");
       }
-      // DATETIME must include timezone (Z or offset)
-      const tPos = value.indexOf("T");
-      const hasTimezone =
-        value.includes("Z") ||
-        value.includes("+") ||
-        value.slice(tPos).includes("-");
-      if (!hasTimezone) {
-        throw new DecodeError("E005", "DATETIME must include timezone (Z or offset)");
-      }
-      return { type: "datetime", value };
+      return { type: "datetime", epochUs, offsetMin };
     }
 
     case DataType.Schedule: {
