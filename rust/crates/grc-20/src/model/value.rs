@@ -5,6 +5,7 @@
 use std::borrow::Cow;
 
 use crate::model::Id;
+use crate::util::{parse_date_rfc3339, parse_datetime_rfc3339, parse_time_rfc3339};
 
 /// Data types for property values (spec Section 2.4).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -151,29 +152,14 @@ pub enum Value<'a> {
     /// Opaque byte array.
     Bytes(Cow<'a, [u8]>),
 
-    /// Calendar date (6 bytes: int32 days + int16 offset_min).
-    Date {
-        /// Signed days since Unix epoch (1970-01-01).
-        days: i32,
-        /// Signed UTC offset in minutes (e.g., +330 for +05:30).
-        offset_min: i16,
-    },
+    /// Calendar date in RFC 3339 format (e.g., "2024-01-15" or "2024-01-15+05:30").
+    Date(Cow<'a, str>),
 
-    /// Time of day (8 bytes: int48 time_us + int16 offset_min).
-    Time {
-        /// Microseconds since midnight (0 to 86,399,999,999).
-        time_us: i64,
-        /// Signed UTC offset in minutes (e.g., +330 for +05:30).
-        offset_min: i16,
-    },
+    /// Time of day in RFC 3339 format (e.g., "14:30:45.123456Z" or "14:30:45+05:30").
+    Time(Cow<'a, str>),
 
-    /// Combined date and time (10 bytes: int64 epoch_us + int16 offset_min).
-    Datetime {
-        /// Microseconds since Unix epoch (1970-01-01T00:00:00Z).
-        epoch_us: i64,
-        /// Signed UTC offset in minutes (e.g., +330 for +05:30).
-        offset_min: i16,
-    },
+    /// Combined date and time in RFC 3339 format (e.g., "2024-01-15T14:30:45.123456Z").
+    Datetime(Cow<'a, str>),
 
     /// RFC 5545 iCalendar schedule string.
     Schedule(Cow<'a, str>),
@@ -276,22 +262,19 @@ impl Value<'_> {
                     return Some("NaN is not allowed in Rect coordinates");
                 }
             }
-            Value::Date { offset_min, .. } => {
-                if *offset_min < -1440 || *offset_min > 1440 {
-                    return Some("DATE offset_min outside range [-1440, +1440]");
+            Value::Date(s) => {
+                if parse_date_rfc3339(s).is_err() {
+                    return Some("Invalid RFC 3339 date format");
                 }
             }
-            Value::Time { time_us, offset_min } => {
-                if *time_us < 0 || *time_us > 86_399_999_999 {
-                    return Some("TIME time_us outside range [0, 86399999999]");
-                }
-                if *offset_min < -1440 || *offset_min > 1440 {
-                    return Some("TIME offset_min outside range [-1440, +1440]");
+            Value::Time(s) => {
+                if parse_time_rfc3339(s).is_err() {
+                    return Some("Invalid RFC 3339 time format");
                 }
             }
-            Value::Datetime { offset_min, .. } => {
-                if *offset_min < -1440 || *offset_min > 1440 {
-                    return Some("DATETIME offset_min outside range [-1440, +1440]");
+            Value::Datetime(s) => {
+                if parse_datetime_rfc3339(s).is_err() {
+                    return Some("Invalid RFC 3339 datetime format");
                 }
             }
             Value::Embedding {

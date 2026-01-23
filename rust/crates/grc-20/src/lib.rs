@@ -76,6 +76,7 @@ pub mod error;
 pub mod genesis;
 pub mod limits;
 pub mod model;
+pub mod util;
 pub mod validate;
 
 // Re-export commonly used types at crate root
@@ -93,6 +94,10 @@ pub use model::{
 };
 pub use model::builder::UpdateRelationBuilder;
 pub use model::id::{derived_uuid, format_id, parse_id, text_value_id, value_id, NIL_ID};
+pub use util::{
+    format_date_rfc3339, format_datetime_rfc3339, format_time_rfc3339,
+    parse_date_rfc3339, parse_datetime_rfc3339, parse_time_rfc3339, DateTimeParseError,
+};
 pub use validate::{validate_edit, validate_position, validate_value, SchemaContext};
 
 /// Crate version.

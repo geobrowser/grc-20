@@ -73,18 +73,18 @@ export function encodeValuePayload(writer: Writer, value: Value): void {
 
     case "time": {
       // Parse RFC 3339 time string
-      const { timeUs, offsetMin } = parseTimeRfc3339(value.value);
-      // TIME: 8 bytes (int48 time_us + int16 offset_min), little-endian
-      writer.writeInt48LE(timeUs);
+      const { timeMicros, offsetMin } = parseTimeRfc3339(value.value);
+      // TIME: 8 bytes (int48 time_micros + int16 offset_min), little-endian
+      writer.writeInt48LE(timeMicros);
       writer.writeInt16LE(offsetMin);
       break;
     }
 
     case "datetime": {
       // Parse RFC 3339 datetime string
-      const { epochUs, offsetMin } = parseDatetimeRfc3339(value.value);
-      // DATETIME: 10 bytes (int64 epoch_us + int16 offset_min), little-endian
-      writer.writeInt64LE(epochUs);
+      const { epochMicros, offsetMin } = parseDatetimeRfc3339(value.value);
+      // DATETIME: 10 bytes (int64 epoch_micros + int16 offset_min), little-endian
+      writer.writeInt64LE(epochMicros);
       writer.writeInt16LE(offsetMin);
       break;
     }
@@ -256,32 +256,32 @@ export function decodeValuePayload(reader: Reader, dataType: DataType): Value {
     }
 
     case DataType.Time: {
-      // TIME: 8 bytes (int48 time_us + int16 offset_min), little-endian
-      const timeUs = reader.readInt48LE();
+      // TIME: 8 bytes (int48 time_micros + int16 offset_min), little-endian
+      const timeMicros = reader.readInt48LE();
       const offsetMin = reader.readInt16LE();
-      // Validate time_us range
-      if (timeUs < 0n || timeUs > 86_399_999_999n) {
-        throw new DecodeError("E005", "TIME timeUs outside range [0, 86399999999]");
+      // Validate time_micros range
+      if (timeMicros < 0n || timeMicros > 86_399_999_999n) {
+        throw new DecodeError("E005", "TIME timeMicros outside range [0, 86399999999]");
       }
       // Validate offset_min range
       if (offsetMin < -1440 || offsetMin > 1440) {
         throw new DecodeError("E005", "TIME offsetMin outside range [-1440, +1440]");
       }
       // Format as RFC 3339
-      const value = formatTimeRfc3339(timeUs, offsetMin);
+      const value = formatTimeRfc3339(timeMicros, offsetMin);
       return { type: "time", value };
     }
 
     case DataType.Datetime: {
-      // DATETIME: 10 bytes (int64 epoch_us + int16 offset_min), little-endian
-      const epochUs = reader.readInt64LE();
+      // DATETIME: 10 bytes (int64 epoch_micros + int16 offset_min), little-endian
+      const epochMicros = reader.readInt64LE();
       const offsetMin = reader.readInt16LE();
       // Validate offset_min range
       if (offsetMin < -1440 || offsetMin > 1440) {
         throw new DecodeError("E005", "DATETIME offsetMin outside range [-1440, +1440]");
       }
       // Format as RFC 3339
-      const value = formatDatetimeRfc3339(epochUs, offsetMin);
+      const value = formatDatetimeRfc3339(epochMicros, offsetMin);
       return { type: "datetime", value };
     }
 

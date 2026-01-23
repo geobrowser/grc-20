@@ -11,6 +11,10 @@ use crate::model::{
     DataType, DecimalMantissa, DictionaryBuilder, EmbeddingSubType, PropertyValue, Value,
     WireDictionaries,
 };
+use crate::util::{
+    format_date_rfc3339, format_datetime_rfc3339, format_time_rfc3339,
+    parse_date_rfc3339, parse_datetime_rfc3339, parse_time_rfc3339,
+};
 
 // =============================================================================
 // DECODING
@@ -267,30 +271,32 @@ fn decode_date<'a>(reader: &mut Reader<'a>) -> Result<Value<'a>, DecodeError> {
         });
     }
 
-    Ok(Value::Date { days, offset_min })
+    // Format as RFC 3339 string
+    let value = format_date_rfc3339(days, offset_min);
+    Ok(Value::Date(Cow::Owned(value)))
 }
 
 fn decode_time<'a>(reader: &mut Reader<'a>) -> Result<Value<'a>, DecodeError> {
-    // TIME: 8 bytes (int48 time_us + int16 offset_min), little-endian
+    // TIME: 8 bytes (int48 time_micros + int16 offset_min), little-endian
     let bytes = reader.read_bytes(8, "time")?;
 
     // Read int48 as 6 bytes, sign-extend to i64
-    let time_us_unsigned = u64::from_le_bytes([
+    let time_micros_unsigned = u64::from_le_bytes([
         bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], 0, 0
     ]);
     // Sign-extend from 48 bits
-    let time_us = if time_us_unsigned & 0x8000_0000_0000 != 0 {
-        (time_us_unsigned | 0xFFFF_0000_0000_0000) as i64
+    let time_micros = if time_micros_unsigned & 0x8000_0000_0000 != 0 {
+        (time_micros_unsigned | 0xFFFF_0000_0000_0000) as i64
     } else {
-        time_us_unsigned as i64
+        time_micros_unsigned as i64
     };
 
     let offset_min = i16::from_le_bytes([bytes[6], bytes[7]]);
 
-    // Validate time_us range
-    if time_us < 0 || time_us > 86_399_999_999 {
+    // Validate time_micros range
+    if time_micros < 0 || time_micros > 86_399_999_999 {
         return Err(DecodeError::MalformedEncoding {
-            context: "TIME time_us outside range [0, 86399999999]",
+            context: "TIME time_micros outside range [0, 86399999999]",
         });
     }
 
@@ -301,13 +307,15 @@ fn decode_time<'a>(reader: &mut Reader<'a>) -> Result<Value<'a>, DecodeError> {
         });
     }
 
-    Ok(Value::Time { time_us, offset_min })
+    // Format as RFC 3339 string
+    let value = format_time_rfc3339(time_micros, offset_min);
+    Ok(Value::Time(Cow::Owned(value)))
 }
 
 fn decode_datetime<'a>(reader: &mut Reader<'a>) -> Result<Value<'a>, DecodeError> {
-    // DATETIME: 10 bytes (int64 epoch_us + int16 offset_min), little-endian
+    // DATETIME: 10 bytes (int64 epoch_micros + int16 offset_min), little-endian
     let bytes = reader.read_bytes(10, "datetime")?;
-    let epoch_us = i64::from_le_bytes([
+    let epoch_micros = i64::from_le_bytes([
         bytes[0], bytes[1], bytes[2], bytes[3],
         bytes[4], bytes[5], bytes[6], bytes[7]
     ]);
@@ -320,7 +328,9 @@ fn decode_datetime<'a>(reader: &mut Reader<'a>) -> Result<Value<'a>, DecodeError
         });
     }
 
-    Ok(Value::Datetime { epoch_us, offset_min })
+    // Format as RFC 3339 string
+    let value = format_datetime_rfc3339(epoch_micros, offset_min);
+    Ok(Value::Datetime(Cow::Owned(value)))
 }
 
 fn decode_schedule<'a>(reader: &mut Reader<'a>) -> Result<Value<'a>, DecodeError> {
@@ -499,45 +509,39 @@ pub fn encode_value(
         Value::Bytes(bytes) => {
             writer.write_bytes_prefixed(bytes);
         }
-        Value::Date { days, offset_min } => {
-            // Validate offset_min range
-            if *offset_min < -1440 || *offset_min > 1440 {
-                return Err(EncodeError::InvalidInput {
-                    context: "DATE offset_min outside range [-1440, +1440]",
-                });
-            }
+        Value::Date(s) => {
+            // Parse RFC 3339 date string
+            let (days, offset_min) = parse_date_rfc3339(s).map_err(|_| EncodeError::InvalidInput {
+                context: "Invalid RFC 3339 date format",
+            })?;
             // DATE: 6 bytes (int32 days + int16 offset_min), little-endian
             writer.write_bytes(&days.to_le_bytes());
             writer.write_bytes(&offset_min.to_le_bytes());
         }
-        Value::Time { time_us, offset_min } => {
-            // Validate time_us range
-            if *time_us < 0 || *time_us > 86_399_999_999 {
+        Value::Time(s) => {
+            // Parse RFC 3339 time string
+            let (time_micros, offset_min) = parse_time_rfc3339(s).map_err(|_| EncodeError::InvalidInput {
+                context: "Invalid RFC 3339 time format",
+            })?;
+            // Validate time_micros range (should already be validated by parser)
+            if time_micros < 0 || time_micros > 86_399_999_999 {
                 return Err(EncodeError::InvalidInput {
-                    context: "TIME time_us outside range [0, 86399999999]",
+                    context: "TIME time_micros outside range [0, 86399999999]",
                 });
             }
-            // Validate offset_min range
-            if *offset_min < -1440 || *offset_min > 1440 {
-                return Err(EncodeError::InvalidInput {
-                    context: "TIME offset_min outside range [-1440, +1440]",
-                });
-            }
-            // TIME: 8 bytes (int48 time_us + int16 offset_min), little-endian
+            // TIME: 8 bytes (int48 time_micros + int16 offset_min), little-endian
             // Write int48 as 6 bytes
-            let time_bytes = time_us.to_le_bytes();
+            let time_bytes = time_micros.to_le_bytes();
             writer.write_bytes(&time_bytes[0..6]);
             writer.write_bytes(&offset_min.to_le_bytes());
         }
-        Value::Datetime { epoch_us, offset_min } => {
-            // Validate offset_min range
-            if *offset_min < -1440 || *offset_min > 1440 {
-                return Err(EncodeError::InvalidInput {
-                    context: "DATETIME offset_min outside range [-1440, +1440]",
-                });
-            }
-            // DATETIME: 10 bytes (int64 epoch_us + int16 offset_min), little-endian
-            writer.write_bytes(&epoch_us.to_le_bytes());
+        Value::Datetime(s) => {
+            // Parse RFC 3339 datetime string
+            let (epoch_micros, offset_min) = parse_datetime_rfc3339(s).map_err(|_| EncodeError::InvalidInput {
+                context: "Invalid RFC 3339 datetime format",
+            })?;
+            // DATETIME: 10 bytes (int64 epoch_micros + int16 offset_min), little-endian
+            writer.write_bytes(&epoch_micros.to_le_bytes());
             writer.write_bytes(&offset_min.to_le_bytes());
         }
         Value::Schedule(s) => {
@@ -963,18 +967,16 @@ mod tests {
         let dicts = WireDictionaries::default();
         let mut dict_builder = DictionaryBuilder::new();
 
-        // Test various date values
+        // Test various date values (RFC 3339 format)
         let test_cases = [
-            (0, 0),           // Unix epoch, UTC
-            (19797, 0),       // March 15, 2024 UTC
-            (19797, 330),     // March 15, 2024 +05:30
-            (-36524, 0),      // 100 BCE
-            (i32::MAX, 0),    // Far future
-            (i32::MIN, 0),    // Far past
+            "1970-01-01Z",        // Unix epoch, UTC
+            "2024-03-15Z",        // March 15, 2024 UTC
+            "2024-03-15+05:30",   // March 15, 2024 +05:30
+            "2024-03-15-08:00",   // March 15, 2024 -08:00
         ];
 
-        for (days, offset_min) in test_cases {
-            let value = Value::Date { days, offset_min };
+        for date_str in test_cases {
+            let value = Value::Date(Cow::Owned(date_str.to_string()));
 
             let mut writer = Writer::new();
             encode_value(&mut writer, &value, &mut dict_builder).unwrap();
@@ -982,7 +984,13 @@ mod tests {
             let mut reader = Reader::new(writer.as_bytes());
             let decoded = decode_value(&mut reader, DataType::Date, &dicts).unwrap();
 
-            assert_eq!(value, decoded);
+            // Compare the string values
+            match (&value, &decoded) {
+                (Value::Date(v1), Value::Date(v2)) => {
+                    assert_eq!(v1.as_ref(), v2.as_ref(), "Roundtrip failed for {}", date_str);
+                }
+                _ => panic!("expected Date values"),
+            }
         }
     }
 
@@ -991,17 +999,17 @@ mod tests {
         let dicts = WireDictionaries::default();
         let mut dict_builder = DictionaryBuilder::new();
 
-        // Test various time values
+        // Test various time values (RFC 3339 format)
         let test_cases = [
-            (0, 0),                      // Midnight UTC
-            (52_200_000_000, 0),         // 14:30:00 UTC
-            (52_200_500_000, 330),       // 14:30:00.500 +05:30
-            (86_399_999_999, 0),         // 23:59:59.999999 UTC
-            (0, -300),                   // Midnight -05:00
+            "00:00:00Z",              // Midnight UTC
+            "14:30:00Z",              // 14:30:00 UTC
+            "14:30:00.5+05:30",       // 14:30:00.500 +05:30
+            "23:59:59.999999Z",       // 23:59:59.999999 UTC
+            "00:00:00-05:00",         // Midnight -05:00
         ];
 
-        for (time_us, offset_min) in test_cases {
-            let value = Value::Time { time_us, offset_min };
+        for time_str in test_cases {
+            let value = Value::Time(Cow::Owned(time_str.to_string()));
 
             let mut writer = Writer::new();
             encode_value(&mut writer, &value, &mut dict_builder).unwrap();
@@ -1009,7 +1017,13 @@ mod tests {
             let mut reader = Reader::new(writer.as_bytes());
             let decoded = decode_value(&mut reader, DataType::Time, &dicts).unwrap();
 
-            assert_eq!(value, decoded);
+            // Compare the string values
+            match (&value, &decoded) {
+                (Value::Time(v1), Value::Time(v2)) => {
+                    assert_eq!(v1.as_ref(), v2.as_ref(), "Roundtrip failed for {}", time_str);
+                }
+                _ => panic!("expected Time values"),
+            }
         }
     }
 
@@ -1018,17 +1032,16 @@ mod tests {
         let dicts = WireDictionaries::default();
         let mut dict_builder = DictionaryBuilder::new();
 
-        // Test various datetime values
+        // Test various datetime values (RFC 3339 format)
         let test_cases = [
-            (0, 0),                          // Unix epoch UTC
-            (1_710_513_000_000_000, 0),      // 2024-03-15T14:30:00Z
-            (1_710_493_200_000_000, 330),    // 2024-03-15T14:30:00+05:30
-            (-1_000_000_000_000, 0),         // Before epoch
-            (i64::MAX / 2, 0),               // Far future (within safe range)
+            "1970-01-01T00:00:00Z",          // Unix epoch UTC
+            "2024-03-15T14:30:00Z",          // 2024-03-15T14:30:00Z
+            "2024-03-15T14:30:00+05:30",     // 2024-03-15T14:30:00+05:30
+            "2024-03-15T14:30:00.123456Z",   // With microseconds
         ];
 
-        for (epoch_us, offset_min) in test_cases {
-            let value = Value::Datetime { epoch_us, offset_min };
+        for datetime_str in test_cases {
+            let value = Value::Datetime(Cow::Owned(datetime_str.to_string()));
 
             let mut writer = Writer::new();
             encode_value(&mut writer, &value, &mut dict_builder).unwrap();
@@ -1036,7 +1049,13 @@ mod tests {
             let mut reader = Reader::new(writer.as_bytes());
             let decoded = decode_value(&mut reader, DataType::Datetime, &dicts).unwrap();
 
-            assert_eq!(value, decoded);
+            // Compare the string values
+            match (&value, &decoded) {
+                (Value::Datetime(v1), Value::Datetime(v2)) => {
+                    assert_eq!(v1.as_ref(), v2.as_ref(), "Roundtrip failed for {}", datetime_str);
+                }
+                _ => panic!("expected Datetime values"),
+            }
         }
     }
 
@@ -1044,47 +1063,55 @@ mod tests {
     fn test_date_validation() {
         let mut dict_builder = DictionaryBuilder::new();
 
-        // DATE should reject offset_min outside range
-        let invalid = Value::Date { days: 0, offset_min: 1500 };
+        // DATE should reject invalid RFC 3339 format
+        let invalid = Value::Date(Cow::Borrowed("not-a-date"));
         let mut writer = Writer::new();
         assert!(encode_value(&mut writer, &invalid, &mut dict_builder).is_err());
 
-        let invalid_neg = Value::Date { days: 0, offset_min: -1500 };
+        // Invalid month
+        let invalid_month = Value::Date(Cow::Borrowed("2024-13-01"));
         let mut writer = Writer::new();
-        assert!(encode_value(&mut writer, &invalid_neg, &mut dict_builder).is_err());
+        assert!(encode_value(&mut writer, &invalid_month, &mut dict_builder).is_err());
     }
 
     #[test]
     fn test_time_validation() {
         let mut dict_builder = DictionaryBuilder::new();
 
-        // TIME should reject time_us outside range
-        let invalid_high = Value::Time { time_us: 86_400_000_000, offset_min: 0 };
+        // TIME should reject invalid RFC 3339 format
+        let invalid = Value::Time(Cow::Borrowed("not:a:time"));
         let mut writer = Writer::new();
-        assert!(encode_value(&mut writer, &invalid_high, &mut dict_builder).is_err());
+        assert!(encode_value(&mut writer, &invalid, &mut dict_builder).is_err());
 
-        let invalid_neg = Value::Time { time_us: -1, offset_min: 0 };
+        // Invalid hours
+        let invalid_hours = Value::Time(Cow::Borrowed("24:00:00"));
         let mut writer = Writer::new();
-        assert!(encode_value(&mut writer, &invalid_neg, &mut dict_builder).is_err());
+        assert!(encode_value(&mut writer, &invalid_hours, &mut dict_builder).is_err());
 
-        // TIME should reject offset_min outside range
-        let invalid_offset = Value::Time { time_us: 0, offset_min: 1500 };
+        // Invalid minutes
+        let invalid_minutes = Value::Time(Cow::Borrowed("14:60:00"));
         let mut writer = Writer::new();
-        assert!(encode_value(&mut writer, &invalid_offset, &mut dict_builder).is_err());
+        assert!(encode_value(&mut writer, &invalid_minutes, &mut dict_builder).is_err());
     }
 
     #[test]
     fn test_datetime_validation() {
         let mut dict_builder = DictionaryBuilder::new();
 
-        // DATETIME should reject offset_min outside range
-        let invalid = Value::Datetime { epoch_us: 0, offset_min: 1500 };
+        // DATETIME should reject invalid RFC 3339 format
+        let invalid = Value::Datetime(Cow::Borrowed("not-a-datetime"));
         let mut writer = Writer::new();
         assert!(encode_value(&mut writer, &invalid, &mut dict_builder).is_err());
 
-        let invalid_neg = Value::Datetime { epoch_us: 0, offset_min: -1500 };
+        // Invalid date part
+        let invalid_date = Value::Datetime(Cow::Borrowed("2024-13-01T00:00:00Z"));
         let mut writer = Writer::new();
-        assert!(encode_value(&mut writer, &invalid_neg, &mut dict_builder).is_err());
+        assert!(encode_value(&mut writer, &invalid_date, &mut dict_builder).is_err());
+
+        // Invalid time part
+        let invalid_time = Value::Datetime(Cow::Borrowed("2024-01-01T25:00:00Z"));
+        let mut writer = Writer::new();
+        assert!(encode_value(&mut writer, &invalid_time, &mut dict_builder).is_err());
     }
 
     #[test]

@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/grc-20", "crates/grc-20-bench", "crates/grc-20-proto-bench", "crates/grc-20-compare"]
 
 [workspace.package]
-version = "0.2.1"
+version = "0.2.2"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/geobrowser/grc-20-rs"

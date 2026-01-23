@@ -72,17 +72,19 @@ All 12 GRC-20 data types are supported:
 | DECIMAL | `Value::Decimal { exponent, mantissa, unit }` | variable |
 | TEXT | `Value::Text { value, language }` | variable |
 | BYTES | `Value::Bytes(Vec<u8>)` | variable |
-| DATE | `Value::Date { days, offset_min }` | 6 bytes |
-| TIME | `Value::Time { time_us, offset_min }` | 8 bytes |
-| DATETIME | `Value::Datetime { epoch_us, offset_min }` | 10 bytes |
+| DATE | `Value::Date(Cow<str>)` | 6 bytes |
+| TIME | `Value::Time(Cow<str>)` | 8 bytes |
+| DATETIME | `Value::Datetime(Cow<str>)` | 10 bytes |
 | SCHEDULE | `Value::Schedule(String)` | variable |
 | POINT | `Value::Point { lon, lat, alt }` | 17-25 bytes |
 | EMBEDDING | `Value::Embedding { sub_type, dims, data }` | variable |
 
-**Temporal types use fixed-width binary encoding:**
-- `DATE`: `days` (i32, days since 1970-01-01) + `offset_min` (i16, UTC offset in minutes)
-- `TIME`: `time_us` (i48, microseconds since midnight) + `offset_min` (i16)
-- `DATETIME`: `epoch_us` (i64, microseconds since Unix epoch) + `offset_min` (i16)
+**Temporal types use RFC 3339 strings in the API:**
+- `DATE`: RFC 3339 date string (e.g., `"2024-01-15"` or `"2024-01-15+05:30"`)
+- `TIME`: RFC 3339 time string (e.g., `"14:30:00Z"` or `"14:30:00.123456+05:30"`)
+- `DATETIME`: RFC 3339 datetime string (e.g., `"2024-01-15T14:30:00Z"`)
+
+The codec converts these to/from the binary wire format internally.
 
 ### Operations
 

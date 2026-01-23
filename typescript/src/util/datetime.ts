@@ -142,7 +142,7 @@ export function formatDateRfc3339(days: number, offsetMin: number = 0): string {
  * Parses an RFC 3339 time string (HH:MM:SS[.ssssss][Z|+HH:MM]) and returns
  * microseconds since midnight and offset in minutes.
  */
-export function parseTimeRfc3339(timeStr: string): { timeUs: bigint; offsetMin: number } {
+export function parseTimeRfc3339(timeStr: string): { timeMicros: bigint; offsetMin: number } {
   // Match HH:MM:SS[.fractional][timezone]
   const match = timeStr.match(
     /^(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,6}))?(Z|[+-]\d{2}:\d{2})?$/
@@ -169,28 +169,28 @@ export function parseTimeRfc3339(timeStr: string): { timeUs: bigint; offsetMin: 
   }
 
   const microseconds = parseFractionalSeconds(fractional);
-  const timeUs =
+  const timeMicros =
     BigInt(hours) * MICROSECONDS_PER_HOUR +
     BigInt(minutes) * MICROSECONDS_PER_MINUTE +
     BigInt(seconds) * MICROSECONDS_PER_SECOND +
     microseconds;
 
   // Validate total is within day
-  if (timeUs > 86_399_999_999n) {
+  if (timeMicros > 86_399_999_999n) {
     throw new Error(`Time exceeds maximum (23:59:59.999999): ${timeStr}`);
   }
 
   const offsetMin = offsetStr ? parseTimezoneOffset(offsetStr) : 0;
 
-  return { timeUs, offsetMin };
+  return { timeMicros, offsetMin };
 }
 
 /**
  * Formats microseconds since midnight as RFC 3339 time string.
  */
-export function formatTimeRfc3339(timeUs: bigint, offsetMin: number = 0): string {
-  const hours = Number(timeUs / MICROSECONDS_PER_HOUR);
-  const remaining1 = timeUs % MICROSECONDS_PER_HOUR;
+export function formatTimeRfc3339(timeMicros: bigint, offsetMin: number = 0): string {
+  const hours = Number(timeMicros / MICROSECONDS_PER_HOUR);
+  const remaining1 = timeMicros % MICROSECONDS_PER_HOUR;
   const minutes = Number(remaining1 / MICROSECONDS_PER_MINUTE);
   const remaining2 = remaining1 % MICROSECONDS_PER_MINUTE;
   const seconds = Number(remaining2 / MICROSECONDS_PER_SECOND);
@@ -213,7 +213,7 @@ export function formatTimeRfc3339(timeUs: bigint, offsetMin: number = 0): string
  * Parses an RFC 3339 datetime string and returns microseconds since Unix epoch
  * and offset in minutes.
  */
-export function parseDatetimeRfc3339(datetimeStr: string): { epochUs: bigint; offsetMin: number } {
+export function parseDatetimeRfc3339(datetimeStr: string): { epochMicros: bigint; offsetMin: number } {
   // Match YYYY-MM-DDTHH:MM:SS[.fractional][timezone]
   const match = datetimeStr.match(
     /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,6}))?(Z|[+-]\d{2}:\d{2})?$/
@@ -258,23 +258,23 @@ export function parseDatetimeRfc3339(datetimeStr: string): { epochUs: bigint; of
   // Convert to microseconds and add fractional component
   // The epochMs is in UTC, but the datetime string represents local time with offset
   // We need to subtract the offset to get the actual UTC time
-  const epochUsUTC = BigInt(epochMs) * 1000n + microseconds;
+  const epochMicrosUTC = BigInt(epochMs) * 1000n + microseconds;
 
   // Adjust for timezone offset: local time + offset = UTC
   // So: UTC = local - offset
   const offsetUs = BigInt(offsetMin) * MICROSECONDS_PER_MINUTE;
-  const epochUs = epochUsUTC - offsetUs;
+  const epochMicros = epochMicrosUTC - offsetUs;
 
-  return { epochUs, offsetMin };
+  return { epochMicros, offsetMin };
 }
 
 /**
  * Formats microseconds since Unix epoch as RFC 3339 datetime string.
  */
-export function formatDatetimeRfc3339(epochUs: bigint, offsetMin: number = 0): string {
+export function formatDatetimeRfc3339(epochMicros: bigint, offsetMin: number = 0): string {
   // Adjust for timezone offset: local time = UTC + offset
   const offsetUs = BigInt(offsetMin) * MICROSECONDS_PER_MINUTE;
-  const localUs = epochUs + offsetUs;
+  const localUs = epochMicros + offsetUs;
 
   // Convert to milliseconds for Date constructor
   const epochMs = Number(localUs / 1000n);

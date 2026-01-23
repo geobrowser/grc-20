@@ -345,41 +345,38 @@ impl<'a> EntityBuilder<'a> {
         self
     }
 
-    /// Adds a DATE value.
+    /// Adds a DATE value in RFC 3339 format.
     ///
     /// # Arguments
-    /// * `days` - Signed days since Unix epoch (1970-01-01)
-    /// * `offset_min` - Signed UTC offset in minutes (e.g., +330 for +05:30)
-    pub fn date(mut self, property: Id, days: i32, offset_min: i16) -> Self {
+    /// * `value` - RFC 3339 date string (e.g., "2024-01-15" or "2024-01-15+05:30")
+    pub fn date(mut self, property: Id, value: impl Into<Cow<'a, str>>) -> Self {
         self.values.push(PropertyValue {
             property,
-            value: Value::Date { days, offset_min },
+            value: Value::Date(value.into()),
         });
         self
     }
 
-    /// Adds a TIME value.
+    /// Adds a TIME value in RFC 3339 format.
     ///
     /// # Arguments
-    /// * `time_us` - Microseconds since midnight (0 to 86,399,999,999)
-    /// * `offset_min` - Signed UTC offset in minutes (e.g., +330 for +05:30)
-    pub fn time(mut self, property: Id, time_us: i64, offset_min: i16) -> Self {
+    /// * `value` - RFC 3339 time string (e.g., "14:30:45.123456Z" or "14:30:45+05:30")
+    pub fn time(mut self, property: Id, value: impl Into<Cow<'a, str>>) -> Self {
         self.values.push(PropertyValue {
             property,
-            value: Value::Time { time_us, offset_min },
+            value: Value::Time(value.into()),
         });
         self
     }
 
-    /// Adds a DATETIME value.
+    /// Adds a DATETIME value in RFC 3339 format.
     ///
     /// # Arguments
-    /// * `epoch_us` - Microseconds since Unix epoch (1970-01-01T00:00:00Z)
-    /// * `offset_min` - Signed UTC offset in minutes (e.g., +330 for +05:30)
-    pub fn datetime(mut self, property: Id, epoch_us: i64, offset_min: i16) -> Self {
+    /// * `value` - RFC 3339 datetime string (e.g., "2024-01-15T14:30:45.123456Z")
+    pub fn datetime(mut self, property: Id, value: impl Into<Cow<'a, str>>) -> Self {
         self.values.push(PropertyValue {
             property,
-            value: Value::Datetime { epoch_us, offset_min },
+            value: Value::Datetime(value.into()),
         });
         self
     }
@@ -505,41 +502,38 @@ impl<'a> UpdateEntityBuilder<'a> {
         self
     }
 
-    /// Sets a DATE value.
+    /// Sets a DATE value in RFC 3339 format.
     ///
     /// # Arguments
-    /// * `days` - Signed days since Unix epoch (1970-01-01)
-    /// * `offset_min` - Signed UTC offset in minutes (e.g., +330 for +05:30)
-    pub fn set_date(mut self, property: Id, days: i32, offset_min: i16) -> Self {
+    /// * `value` - RFC 3339 date string (e.g., "2024-01-15" or "2024-01-15+05:30")
+    pub fn set_date(mut self, property: Id, value: impl Into<Cow<'a, str>>) -> Self {
         self.set_properties.push(PropertyValue {
             property,
-            value: Value::Date { days, offset_min },
+            value: Value::Date(value.into()),
         });
         self
     }
 
-    /// Sets a TIME value.
+    /// Sets a TIME value in RFC 3339 format.
     ///
     /// # Arguments
-    /// * `time_us` - Microseconds since midnight (0 to 86,399,999,999)
-    /// * `offset_min` - Signed UTC offset in minutes (e.g., +330 for +05:30)
-    pub fn set_time(mut self, property: Id, time_us: i64, offset_min: i16) -> Self {
+    /// * `value` - RFC 3339 time string (e.g., "14:30:45.123456Z" or "14:30:45+05:30")
+    pub fn set_time(mut self, property: Id, value: impl Into<Cow<'a, str>>) -> Self {
         self.set_properties.push(PropertyValue {
             property,
-            value: Value::Time { time_us, offset_min },
+            value: Value::Time(value.into()),
         });
         self
     }
 
-    /// Sets a DATETIME value.
+    /// Sets a DATETIME value in RFC 3339 format.
     ///
     /// # Arguments
-    /// * `epoch_us` - Microseconds since Unix epoch (1970-01-01T00:00:00Z)
-    /// * `offset_min` - Signed UTC offset in minutes (e.g., +330 for +05:30)
-    pub fn set_datetime(mut self, property: Id, epoch_us: i64, offset_min: i16) -> Self {
+    /// * `value` - RFC 3339 datetime string (e.g., "2024-01-15T14:30:45.123456Z")
+    pub fn set_datetime(mut self, property: Id, value: impl Into<Cow<'a, str>>) -> Self {
         self.set_properties.push(PropertyValue {
             property,
-            value: Value::Datetime { epoch_us, offset_min },
+            value: Value::Datetime(value.into()),
         });
         self
     }
@@ -954,7 +948,9 @@ mod tests {
                     .float64([4u8; 16], 3.14, None)
                     .bool([5u8; 16], true)
                     .point([6u8; 16], -74.0060, 40.7128, None)
-                    .date([7u8; 16], 19738, 0) // 2024-01-15 UTC
+                    .date([7u8; 16], "2024-01-15Z") // RFC 3339 date
+                    .time([10u8; 16], "14:30:00Z") // RFC 3339 time
+                    .datetime([11u8; 16], "2024-01-15T14:30:00Z") // RFC 3339 datetime
                     .schedule([8u8; 16], "BEGIN:VEVENT\r\nDTSTART:20240315T090000Z\r\nEND:VEVENT")
                     .bytes([9u8; 16], vec![1, 2, 3, 4])
             })
@@ -962,7 +958,7 @@ mod tests {
 
         match &edit.ops[0] {
             Op::CreateEntity(ce) => {
-                assert_eq!(ce.values.len(), 8);
+                assert_eq!(ce.values.len(), 10);
             }
             _ => panic!("Expected CreateEntity"),
         }

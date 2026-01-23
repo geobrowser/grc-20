@@ -298,9 +298,9 @@ if (!posResult.valid) {
 | `DECIMAL` | `{ type: "decimal", exponent: number, mantissa: bigint, unit?: Id }` |
 | `TEXT` | `{ type: "text", value: string, language?: Id }` |
 | `BYTES` | `{ type: "bytes", value: Uint8Array }` |
-| `DATE` | `{ type: "date", value: string }` (ISO 8601) |
-| `TIME` | `{ type: "time", value: string }` (HH:MM:SS) |
-| `DATETIME` | `{ type: "datetime", value: string }` (ISO 8601) |
+| `DATE` | `{ type: "date", value: string }` (RFC 3339, e.g. `"2024-01-15Z"`) |
+| `TIME` | `{ type: "time", value: string }` (RFC 3339, e.g. `"14:30:00Z"`) |
+| `DATETIME` | `{ type: "datetime", value: string }` (RFC 3339, e.g. `"2024-01-15T14:30:00Z"`) |
 | `SCHEDULE` | `{ type: "schedule", value: string }` (cron-like) |
 | `POINT` | `{ type: "point", lat: number, lon: number }` |
 | `EMBEDDING` | `{ type: "embedding", subType: EmbeddingSubType.Float32 \| EmbeddingSubType.Int8 \| EmbeddingSubType.Binary, data: number[] }` |
