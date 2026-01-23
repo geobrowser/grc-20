@@ -2,6 +2,14 @@ import type { Id } from "../types/id.js";
 import type { DecimalMantissa, PropertyValue, Value } from "../types/value.js";
 import { DataType, EmbeddingSubType, embeddingBytesForDims } from "../types/value.js";
 import { DecodeError, Reader, Writer } from "./primitives.js";
+import {
+  parseDateRfc3339,
+  formatDateRfc3339,
+  parseTimeRfc3339,
+  formatTimeRfc3339,
+  parseDatetimeRfc3339,
+  formatDatetimeRfc3339,
+} from "../util/datetime.js";
 
 /**
  * Dictionary builder for tracking property/language/unit indices.
@@ -54,39 +62,32 @@ export function encodeValuePayload(writer: Writer, value: Value): void {
       writer.writeLengthPrefixedBytes(value.value);
       break;
 
-    case "date":
-      // Validate offset_min range
-      if (value.offsetMin < -1440 || value.offsetMin > 1440) {
-        throw new Error("DATE offsetMin outside range [-1440, +1440]");
-      }
+    case "date": {
+      // Parse RFC 3339 date string
+      const { days, offsetMin } = parseDateRfc3339(value.value);
       // DATE: 6 bytes (int32 days + int16 offset_min), little-endian
-      writer.writeInt32LE(value.days);
-      writer.writeInt16LE(value.offsetMin);
+      writer.writeInt32LE(days);
+      writer.writeInt16LE(offsetMin);
       break;
+    }
 
-    case "time":
-      // Validate time_us range
-      if (value.timeUs < 0n || value.timeUs > 86_399_999_999n) {
-        throw new Error("TIME timeUs outside range [0, 86399999999]");
-      }
-      // Validate offset_min range
-      if (value.offsetMin < -1440 || value.offsetMin > 1440) {
-        throw new Error("TIME offsetMin outside range [-1440, +1440]");
-      }
+    case "time": {
+      // Parse RFC 3339 time string
+      const { timeUs, offsetMin } = parseTimeRfc3339(value.value);
       // TIME: 8 bytes (int48 time_us + int16 offset_min), little-endian
-      writer.writeInt48LE(value.timeUs);
-      writer.writeInt16LE(value.offsetMin);
+      writer.writeInt48LE(timeUs);
+      writer.writeInt16LE(offsetMin);
       break;
+    }
 
-    case "datetime":
-      // Validate offset_min range
-      if (value.offsetMin < -1440 || value.offsetMin > 1440) {
-        throw new Error("DATETIME offsetMin outside range [-1440, +1440]");
-      }
+    case "datetime": {
+      // Parse RFC 3339 datetime string
+      const { epochUs, offsetMin } = parseDatetimeRfc3339(value.value);
       // DATETIME: 10 bytes (int64 epoch_us + int16 offset_min), little-endian
-      writer.writeInt64LE(value.epochUs);
-      writer.writeInt16LE(value.offsetMin);
+      writer.writeInt64LE(epochUs);
+      writer.writeInt16LE(offsetMin);
       break;
+    }
 
     case "schedule":
       writer.writeString(value.value);
@@ -230,7 +231,9 @@ export function decodeValuePayload(reader: Reader, dataType: DataType): Value {
       if (offsetMin < -1440 || offsetMin > 1440) {
         throw new DecodeError("E005", "DATE offsetMin outside range [-1440, +1440]");
       }
-      return { type: "date", days, offsetMin };
+      // Format as RFC 3339
+      const value = formatDateRfc3339(days, offsetMin);
+      return { type: "date", value };
     }
 
     case DataType.Time: {
@@ -245,7 +248,9 @@ export function decodeValuePayload(reader: Reader, dataType: DataType): Value {
       if (offsetMin < -1440 || offsetMin > 1440) {
         throw new DecodeError("E005", "TIME offsetMin outside range [-1440, +1440]");
       }
-      return { type: "time", timeUs, offsetMin };
+      // Format as RFC 3339
+      const value = formatTimeRfc3339(timeUs, offsetMin);
+      return { type: "time", value };
     }
 
     case DataType.Datetime: {
@@ -256,7 +261,9 @@ export function decodeValuePayload(reader: Reader, dataType: DataType): Value {
       if (offsetMin < -1440 || offsetMin > 1440) {
         throw new DecodeError("E005", "DATETIME offsetMin outside range [-1440, +1440]");
       }
-      return { type: "datetime", epochUs, offsetMin };
+      // Format as RFC 3339
+      const value = formatDatetimeRfc3339(epochUs, offsetMin);
+      return { type: "datetime", value };
     }
 
     case DataType.Schedule: {

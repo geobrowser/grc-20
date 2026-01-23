@@ -1,4 +1,9 @@
 import type { Id } from "./id.js";
+import {
+  parseDateRfc3339,
+  parseTimeRfc3339,
+  parseDatetimeRfc3339,
+} from "../util/datetime.js";
 
 /**
  * Data types for property values (spec Section 2.4).
@@ -62,28 +67,22 @@ export type Value =
   | { type: "text"; value: string; language?: Id }
   | { type: "bytes"; value: Uint8Array }
   | {
-      /** Calendar date (6 bytes: int32 days + int16 offset_min). */
+      /** Calendar date in RFC 3339 format (YYYY-MM-DD with optional timezone). */
       type: "date";
-      /** Signed days since Unix epoch (1970-01-01). */
-      days: number;
-      /** Signed UTC offset in minutes (e.g., +330 for +05:30). */
-      offsetMin: number;
+      /** RFC 3339 date string (e.g., "2024-01-15" or "2024-01-15+05:30"). */
+      value: string;
     }
   | {
-      /** Time of day (8 bytes: int48 time_us + int16 offset_min). */
+      /** Time of day in RFC 3339 format. */
       type: "time";
-      /** Microseconds since midnight (0 to 86,399,999,999). */
-      timeUs: bigint;
-      /** Signed UTC offset in minutes (e.g., +330 for +05:30). */
-      offsetMin: number;
+      /** RFC 3339 time string (e.g., "14:30:45.123456Z" or "14:30:45+05:30"). */
+      value: string;
     }
   | {
-      /** Combined date and time (10 bytes: int64 epoch_us + int16 offset_min). */
+      /** Combined date and time in RFC 3339 format. */
       type: "datetime";
-      /** Microseconds since Unix epoch (1970-01-01T00:00:00Z). */
-      epochUs: bigint;
-      /** Signed UTC offset in minutes (e.g., +330 for +05:30). */
-      offsetMin: number;
+      /** RFC 3339 datetime string (e.g., "2024-01-15T14:30:45.123456Z"). */
+      value: string;
     }
   | { type: "schedule"; value: string }
   | { type: "point"; lon: number; lat: number; alt?: number }
@@ -179,21 +178,24 @@ export function validateValue(value: Value): string | undefined {
       }
       break;
     case "date":
-      if (value.offsetMin < -1440 || value.offsetMin > 1440) {
-        return "DATE offsetMin outside range [-1440, +1440]";
+      try {
+        parseDateRfc3339(value.value);
+      } catch (e) {
+        return e instanceof Error ? e.message : "Invalid RFC 3339 date";
       }
       break;
     case "time":
-      if (value.timeUs < 0n || value.timeUs > 86_399_999_999n) {
-        return "TIME timeUs outside range [0, 86399999999]";
-      }
-      if (value.offsetMin < -1440 || value.offsetMin > 1440) {
-        return "TIME offsetMin outside range [-1440, +1440]";
+      try {
+        parseTimeRfc3339(value.value);
+      } catch (e) {
+        return e instanceof Error ? e.message : "Invalid RFC 3339 time";
       }
       break;
     case "datetime":
-      if (value.offsetMin < -1440 || value.offsetMin > 1440) {
-        return "DATETIME offsetMin outside range [-1440, +1440]";
+      try {
+        parseDatetimeRfc3339(value.value);
+      } catch (e) {
+        return e instanceof Error ? e.message : "Invalid RFC 3339 datetime";
       }
       break;
     case "embedding": {

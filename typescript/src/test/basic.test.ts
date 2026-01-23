@@ -632,7 +632,7 @@ describe("Codec", () => {
          .text(parseId("44444444444444444444444444444444")!, "Hello World", undefined)
          .bytes(parseId("55555555555555555555555555555555")!, new Uint8Array([1, 2, 3, 4]))
          .schedule(parseId("66666666666666666666666666666666")!, "FREQ=WEEKLY;BYDAY=MO")
-         .date(parseId("77777777777777777777777777777777")!, 19738, 0) // 2024-01-15 UTC
+         .date(parseId("77777777777777777777777777777777")!, "2024-01-15Z")
          .point(parseId("88888888888888888888888888888888")!, -74.006, 40.7128)
       )
       .build();
@@ -667,6 +667,61 @@ describe("Codec", () => {
         expect(pointVal.value.lon).toBeCloseTo(-74.006, 3);
         expect(pointVal.value.lat).toBeCloseTo(40.7128, 4);
       }
+    }
+  });
+
+  it("encodes and decodes RFC 3339 date/time/datetime values", () => {
+    const editId = randomId();
+    const entityId = randomId();
+
+    const edit = new EditBuilder(editId)
+      .setName("DateTime Test")
+      .createEntity(entityId, (e) =>
+        e.date(parseId("11111111111111111111111111111111")!, "2024-01-15Z")
+         .date(parseId("22222222222222222222222222222222")!, "2024-06-30+05:30")
+         .time(parseId("33333333333333333333333333333333")!, "14:30:45.123456Z")
+         .time(parseId("44444444444444444444444444444444")!, "10:15:00-08:00")
+         .datetime(parseId("55555555555555555555555555555555")!, "2024-01-15T14:30:45.123456Z")
+         .datetime(parseId("66666666666666666666666666666666")!, "2024-12-31T23:59:59+05:30")
+      )
+      .build();
+
+    const encoded = encodeEdit(edit);
+    const decoded = decodeEdit(encoded);
+
+    expect(decoded.ops.length).toBe(1);
+    const op = decoded.ops[0];
+    expect(op.type).toBe("createEntity");
+
+    if (op.type === "createEntity") {
+      expect(op.values.length).toBe(6);
+
+      // Check date values
+      const dateVal1 = op.values.find(v =>
+        v.value.type === "date" && v.value.value === "2024-01-15Z");
+      expect(dateVal1).toBeDefined();
+
+      const dateVal2 = op.values.find(v =>
+        v.value.type === "date" && v.value.value === "2024-06-30+05:30");
+      expect(dateVal2).toBeDefined();
+
+      // Check time values
+      const timeVal1 = op.values.find(v =>
+        v.value.type === "time" && v.value.value === "14:30:45.123456Z");
+      expect(timeVal1).toBeDefined();
+
+      const timeVal2 = op.values.find(v =>
+        v.value.type === "time" && v.value.value === "10:15:00-08:00");
+      expect(timeVal2).toBeDefined();
+
+      // Check datetime values
+      const dtVal1 = op.values.find(v =>
+        v.value.type === "datetime" && v.value.value === "2024-01-15T14:30:45.123456Z");
+      expect(dtVal1).toBeDefined();
+
+      const dtVal2 = op.values.find(v =>
+        v.value.type === "datetime" && v.value.value === "2024-12-31T23:59:59+05:30");
+      expect(dtVal2).toBeDefined();
     }
   });
 

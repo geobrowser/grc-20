@@ -84,39 +84,36 @@ export class EntityBuilder {
 
   /**
    * Adds a DATE value.
-   * @param days - Signed days since Unix epoch (1970-01-01)
-   * @param offsetMin - Signed UTC offset in minutes (e.g., +330 for +05:30)
+   * @param value - RFC 3339 date string (e.g., "2024-01-15" or "2024-01-15+05:30")
    */
-  date(property: Id, days: number, offsetMin: number = 0): this {
+  date(property: Id, value: string): this {
     this.values.push({
       property,
-      value: { type: "date", days, offsetMin },
+      value: { type: "date", value },
     });
     return this;
   }
 
   /**
    * Adds a TIME value.
-   * @param timeUs - Microseconds since midnight (0 to 86,399,999,999)
-   * @param offsetMin - Signed UTC offset in minutes (e.g., +330 for +05:30)
+   * @param value - RFC 3339 time string (e.g., "14:30:45.123456Z" or "14:30:45+05:30")
    */
-  time(property: Id, timeUs: bigint, offsetMin: number = 0): this {
+  time(property: Id, value: string): this {
     this.values.push({
       property,
-      value: { type: "time", timeUs, offsetMin },
+      value: { type: "time", value },
     });
     return this;
   }
 
   /**
    * Adds a DATETIME value.
-   * @param epochUs - Microseconds since Unix epoch (1970-01-01T00:00:00Z)
-   * @param offsetMin - Signed UTC offset in minutes (e.g., +330 for +05:30)
+   * @param value - RFC 3339 datetime string (e.g., "2024-01-15T14:30:45.123456Z")
    */
-  datetime(property: Id, epochUs: bigint, offsetMin: number = 0): this {
+  datetime(property: Id, value: string): this {
     this.values.push({
       property,
-      value: { type: "datetime", epochUs, offsetMin },
+      value: { type: "datetime", value },
     });
     return this;
   }

@@ -21,10 +21,10 @@ GRC-20 v2 is a binary property graph format for decentralized knowledge networks
 |------|------------|
 | Entity | A node in the graph, identified by ID |
 | Relation | A directed edge between entities, identified by ID |
-| Value Ref | A referenceable handle for a value slot, identified by ID |
 | Object | An Entity, Relation, or Value Ref (used when referencing all three) |
 | Property | An entity representing a named attribute |
 | Value | A property instance on an object |
+| Value Ref | A referenceable handle for a value slot, identified by ID |
 | Type | A classification tag for entities |
 | Op | An atomic operation that modifies graph state |
 | Edit | A batch of ops with metadata |
