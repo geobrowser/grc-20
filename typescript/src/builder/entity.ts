@@ -72,12 +72,12 @@ export class EntityBuilder {
   }
 
   /**
-   * Adds a POINT value (longitude, latitude, optional altitude).
+   * Adds a POINT value (latitude, longitude, optional altitude).
    */
-  point(property: Id, lon: number, lat: number, alt?: number): this {
+  point(property: Id, lat: number, lon: number, alt?: number): this {
     this.values.push({
       property,
-      value: { type: "point", lon, lat, alt },
+      value: { type: "point", lat, lon, alt },
     });
     return this;
   }

@@ -85,7 +85,7 @@ export type Value =
       value: string;
     }
   | { type: "schedule"; value: string }
-  | { type: "point"; lon: number; lat: number; alt?: number }
+  | { type: "point"; lat: number; lon: number; alt?: number }
   | { type: "embedding"; subType: EmbeddingSubType; dims: number; data: Uint8Array };
 
 /**
@@ -164,13 +164,13 @@ export function validateValue(value: Value): string | undefined {
       break;
     }
     case "point":
-      if (value.lon < -180 || value.lon > 180) {
-        return "longitude out of range [-180, +180]";
-      }
       if (value.lat < -90 || value.lat > 90) {
         return "latitude out of range [-90, +90]";
       }
-      if (Number.isNaN(value.lon) || Number.isNaN(value.lat)) {
+      if (value.lon < -180 || value.lon > 180) {
+        return "longitude out of range [-180, +180]";
+      }
+      if (Number.isNaN(value.lat) || Number.isNaN(value.lon)) {
         return "NaN is not allowed in Point coordinates";
       }
       if (value.alt !== undefined && Number.isNaN(value.alt)) {

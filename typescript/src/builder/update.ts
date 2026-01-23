@@ -86,12 +86,12 @@ export class UpdateEntityBuilder {
   }
 
   /**
-   * Sets a POINT value (longitude, latitude, optional altitude).
+   * Sets a POINT value (latitude, longitude, optional altitude).
    */
-  setPoint(property: Id, lon: number, lat: number, alt?: number): this {
+  setPoint(property: Id, lat: number, lon: number, alt?: number): this {
     this._set.push({
       property,
-      value: { type: "point", lon, lat, alt },
+      value: { type: "point", lat, lon, alt },
     });
     return this;
   }

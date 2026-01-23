@@ -42,7 +42,7 @@ All identifiers are RFC 4122 UUIDs.
 ID := UUID (16 bytes)
 ```
 
-**Random IDs:** Use UUIDv4 (random) or UUIDv7 (time-ordered). UUIDv7 is RECOMMENDED for entities and relations as it enables time-based sorting.
+**Random IDs:** Use UUIDv4 (random).
 
 **Derived IDs:** Content-addressed IDs SHOULD use UUIDv8 with SHA-256:
 
@@ -83,7 +83,7 @@ Properties are entities that define attributes. Property names, descriptions, an
 
 ```
 DataType := BOOL | INT64 | FLOAT64 | DECIMAL | TEXT | BYTES
-          | DATE | TIME | DATETIME | SCHEDULE | POINT | EMBEDDING
+          | DATE | TIME | DATETIME | SCHEDULE | POINT | RECT | EMBEDDING
 ```
 
 **Data types in edits:** Each edit declares the data type for each property it uses (Section 4.3). All values for a given property within an edit MUST use the same data type. Different edits MAY use different data types for the same property—the data type is per-value metadata, not a global constraint.
@@ -100,12 +100,13 @@ DataType := BOOL | INT64 | FLOAT64 | DECIMAL | TEXT | BYTES
 | DECIMAL | 4 | Arbitrary-precision decimal |
 | TEXT | 5 | UTF-8 string |
 | BYTES | 6 | Opaque byte array |
-| DATE | 7 | ISO 8601 date (year, year-month, or year-month-day) |
-| TIME | 8 | ISO 8601 time with timezone |
-| DATETIME | 9 | ISO 8601 datetime with timezone |
+| DATE | 7 | Calendar date with timezone |
+| TIME | 8 | Time of day with timezone |
+| DATETIME | 9 | Timestamp with timezone |
 | SCHEDULE | 10 | RFC 5545 schedule or availability |
 | POINT | 11 | WGS84 coordinate |
-| EMBEDDING | 12 | Dense vector |
+| RECT | 12 | Axis-aligned bounding box |
+| EMBEDDING | 13 | Dense vector |
 
 **Data type semantics:**
 
@@ -121,7 +122,8 @@ DataType := BOOL | INT64 | FLOAT64 | DECIMAL | TEXT | BYTES
 | TIME | 8 bytes | time_us (int48) + offset_min (int16) |
 | DATETIME | 10 bytes | epoch_us (int64) + offset_min (int16) |
 | SCHEDULE | UTF-8 string | RFC 5545 iCalendar component |
-| POINT | 2-3 FLOAT64, little-endian | [lon, lat] or [lon, lat, alt] WGS84 |
+| POINT | 2-3 FLOAT64, little-endian | [lat, lon] or [lat, lon, alt] WGS84 |
+| RECT | 4 FLOAT64, little-endian | [min_lat, min_lon, max_lat, max_lon] WGS84 |
 | EMBEDDING | sub_type + dims + bytes | Dense vector for similarity search |
 
 #### DECIMAL
@@ -254,17 +256,49 @@ WGS84 geographic coordinate with 2 or 3 ordinates.
 
 ```
 POINT {
-  longitude: float64  // -180 to +180 (required)
   latitude: float64   // -90 to +90 (required)
+  longitude: float64  // -180 to +180 (required)
   altitude: float64?  // meters above WGS84 ellipsoid (optional)
 }
 ```
 
-**Coordinate order (NORMATIVE):** `[longitude, latitude]` or `[longitude, latitude, altitude]`.
+**Coordinate order (NORMATIVE):** `[latitude, longitude]` or `[latitude, longitude, altitude]`.
 
-**Bounds validation (NORMATIVE):** Longitude MUST be in range [-180, +180]. Latitude MUST be in range [-90, +90]. Values outside these ranges MUST be rejected (E005). Altitude has no bounds restrictions.
+**Bounds validation (NORMATIVE):** Latitude MUST be in range [-90, +90]. Longitude MUST be in range [-180, +180]. Values outside these ranges MUST be rejected (E005). Altitude has no bounds restrictions.
 
 For complex geometry (polygons, lines), use BYTES with WKB encoding.
+
+#### RECT
+
+Axis-aligned bounding box in WGS84 coordinates, represented as a fixed 32-byte binary value.
+
+```
+RECT {
+  min_lat: float64  // Southern edge, -90 to +90
+  min_lon: float64  // Western edge, -180 to +180
+  max_lat: float64  // Northern edge, -90 to +90
+  max_lon: float64  // Eastern edge, -180 to +180
+}
+```
+
+**Wire format (NORMATIVE):** 32 bytes, fixed-width:
+- Bytes 0–7: `min_lat` (IEEE 754 double, little-endian)
+- Bytes 8–15: `min_lon` (IEEE 754 double, little-endian)
+- Bytes 16–23: `max_lat` (IEEE 754 double, little-endian)
+- Bytes 24–31: `max_lon` (IEEE 754 double, little-endian)
+
+**Coordinate order (NORMATIVE):** `[min_lat, min_lon, max_lat, max_lon]` (southwest corner, then northeast corner).
+
+**Examples:**
+- Continental US: `min_lat = 24.5`, `min_lon = -125.0`, `max_lat = 49.4`, `max_lon = -66.9`
+- Prime meridian crossing: `min_lat = 35.0`, `min_lon = -10.0`, `max_lat = 55.0`, `max_lon = 10.0`
+
+**Bounds validation (NORMATIVE):** Implementations MUST reject:
+- `min_lat` or `max_lat` outside range [-90, +90]
+- `min_lon` or `max_lon` outside range [-180, +180]
+- NaN values in any coordinate
+
+**Note:** `min_lon > max_lon` is valid and indicates a bounding box that crosses the antimeridian (±180°).
 
 #### EMBEDDING
 
@@ -1213,7 +1247,8 @@ Date: days: int32 (LE), offset_min: int16 (LE) — 6 bytes total
 Time: time_us: int48 (LE), offset_min: int16 (LE) — 8 bytes total
 Datetime: epoch_us: int64 (LE), offset_min: int16 (LE) — 10 bytes total
 Schedule: len: varint, data: UTF-8 bytes (RFC 5545)
-Point: ordinate_count: uint8 (2 or 3), longitude: Float64, latitude: Float64, [altitude: Float64]
+Point: ordinate_count: uint8 (2 or 3), latitude: Float64, longitude: Float64, [altitude: Float64]
+Rect: min_lat: Float64, min_lon: Float64, max_lat: Float64, max_lon: Float64 — 32 bytes total
 Embedding:
   sub_type: uint8 (0x00=f32, 0x01=i8, 0x02=binary)
   dims: varint
@@ -1318,6 +1353,7 @@ id = derived_uuid("grc20:genesis:datatype:" + type_name)
 | Datetime | datetime | `derived_uuid("grc20:genesis:datatype:datetime")` |
 | Schedule | schedule | `derived_uuid("grc20:genesis:datatype:schedule")` |
 | Point | point | `derived_uuid("grc20:genesis:datatype:point")` |
+| Rect | rect | `derived_uuid("grc20:genesis:datatype:rect")` |
 | Embedding | embedding | `derived_uuid("grc20:genesis:datatype:embedding")` |
 
 **Usage:** To indicate that property X expects INT64 values, create a `Data Type` relation from X to the Int64 entity. Applications query this relation to determine the expected type for UX rendering and query construction.
@@ -1351,8 +1387,9 @@ Indexers MUST reject edits that fail structural validation:
 | DECIMAL normalization | Mantissa has trailing zeros, or zero not encoded as {0,0} |
 | Signatures | Invalid (if governance requires) |
 | BOOL values | Not 0x00 or 0x01 |
-| POINT bounds | Longitude outside [-180, +180] or latitude outside [-90, +90] |
+| POINT bounds | Latitude outside [-90, +90] or longitude outside [-180, +180] |
 | POINT ordinate count | ordinate_count not 2 or 3 |
+| RECT bounds | Latitude outside [-90, +90] or longitude outside [-180, +180] |
 | DATE offset_min | Outside range [-1440, +1440] |
 | TIME time_us | Outside range [0, 86399999999] |
 | TIME offset_min | Outside range [-1440, +1440] |
