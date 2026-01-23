@@ -66,6 +66,8 @@ export interface UpdateEntity {
 export interface DeleteEntity {
   type: "deleteEntity";
   id: Id;
+  /** Optional context for grouping changes (spec Section 4.5). */
+  context?: Context;
 }
 
 /**
@@ -74,6 +76,8 @@ export interface DeleteEntity {
 export interface RestoreEntity {
   type: "restoreEntity";
   id: Id;
+  /** Optional context for grouping changes (spec Section 4.5). */
+  context?: Context;
 }
 
 /**
@@ -128,6 +132,8 @@ export interface UpdateRelation {
 export interface DeleteRelation {
   type: "deleteRelation";
   id: Id;
+  /** Optional context for grouping changes (spec Section 4.5). */
+  context?: Context;
 }
 
 /**
@@ -136,6 +142,8 @@ export interface DeleteRelation {
 export interface RestoreRelation {
   type: "restoreRelation";
   id: Id;
+  /** Optional context for grouping changes (spec Section 4.5). */
+  context?: Context;
 }
 
 /**

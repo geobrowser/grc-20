@@ -131,7 +131,7 @@ fn main() {
                     i, format_id(id), format_id(from), format_id(to));
                 println!("      type: {}", format_id(relation_type));
             }
-            Op::DeleteEntity(DeleteEntity { id }) => {
+            Op::DeleteEntity(DeleteEntity { id, .. }) => {
                 println!("[{}] DeleteEntity {}", i, format_id(id));
             }
             _ => {

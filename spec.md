@@ -1058,7 +1058,7 @@ op_type values:
   9 = CreateValueRef
 ```
 
-**Context reference encoding:** Ops that modify entities or relations can include a context reference to indicate which context they belong to. The `context_ref` field is encoded as a varint where `0xFFFFFFFF` means no context, and other values are indices into the edit's `contexts` array.
+**Context reference encoding:** All entity and relation ops (CreateEntity, UpdateEntity, DeleteEntity, RestoreEntity, CreateRelation, UpdateRelation, DeleteRelation, RestoreRelation) include a context reference to indicate which context they belong to. The `context_ref` field is encoded as a varint where `0xFFFFFFFF` means no context, and other values are indices into the edit's `contexts` array. CreateValueRef does not support context.
 
 **CreateEntity:**
 ```
@@ -1092,11 +1092,13 @@ UnsetValue:
 **DeleteEntity:**
 ```
 id: ObjectRef
+context_ref: varint              // 0xFFFFFFFF = no context, else index into contexts[]
 ```
 
 **RestoreEntity:**
 ```
 id: ObjectRef
+context_ref: varint              // 0xFFFFFFFF = no context, else index into contexts[]
 ```
 
 **CreateRelation:**
@@ -1157,11 +1159,13 @@ context_ref: varint              // 0xFFFFFFFF = no context, else index into con
 **DeleteRelation:**
 ```
 id: ObjectRef
+context_ref: varint              // 0xFFFFFFFF = no context, else index into contexts[]
 ```
 
 **RestoreRelation:**
 ```
 id: ObjectRef
+context_ref: varint              // 0xFFFFFFFF = no context, else index into contexts[]
 ```
 
 **CreateValueRef:**

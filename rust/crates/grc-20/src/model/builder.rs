@@ -130,13 +130,13 @@ impl<'a> EditBuilder<'a> {
 
     /// Adds a DeleteEntity operation.
     pub fn delete_entity(mut self, id: Id) -> Self {
-        self.ops.push(Op::DeleteEntity(DeleteEntity { id }));
+        self.ops.push(Op::DeleteEntity(DeleteEntity { id, context: None }));
         self
     }
 
     /// Adds a RestoreEntity operation.
     pub fn restore_entity(mut self, id: Id) -> Self {
-        self.ops.push(Op::RestoreEntity(RestoreEntity { id }));
+        self.ops.push(Op::RestoreEntity(RestoreEntity { id, context: None }));
         self
     }
 
@@ -218,13 +218,13 @@ impl<'a> EditBuilder<'a> {
 
     /// Adds a DeleteRelation operation.
     pub fn delete_relation(mut self, id: Id) -> Self {
-        self.ops.push(Op::DeleteRelation(DeleteRelation { id }));
+        self.ops.push(Op::DeleteRelation(DeleteRelation { id, context: None }));
         self
     }
 
     /// Adds a RestoreRelation operation.
     pub fn restore_relation(mut self, id: Id) -> Self {
-        self.ops.push(Op::RestoreRelation(RestoreRelation { id }));
+        self.ops.push(Op::RestoreRelation(RestoreRelation { id, context: None }));
         self
     }
 

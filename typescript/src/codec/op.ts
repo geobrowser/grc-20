@@ -189,11 +189,17 @@ function encodeUnsetLanguage(writer: Writer, lang: UnsetLanguage, dicts: Diction
 function encodeDeleteEntity(writer: Writer, op: DeleteEntity, dicts: OpDictionaryIndices): void {
   writer.writeByte(OP_TYPE_DELETE_ENTITY);
   writer.writeVarintNumber(dicts.getObjectIndex(op.id));
+  // context_ref: 0xFFFFFFFF = no context, else index
+  const contextRef = op.context !== undefined ? dicts.addContext(op.context) : NO_CONTEXT_REF;
+  writer.writeVarint(BigInt(contextRef));
 }
 
 function encodeRestoreEntity(writer: Writer, op: RestoreEntity, dicts: OpDictionaryIndices): void {
   writer.writeByte(OP_TYPE_RESTORE_ENTITY);
   writer.writeVarintNumber(dicts.getObjectIndex(op.id));
+  // context_ref: 0xFFFFFFFF = no context, else index
+  const contextRef = op.context !== undefined ? dicts.addContext(op.context) : NO_CONTEXT_REF;
+  writer.writeVarint(BigInt(contextRef));
 }
 
 function encodeCreateRelation(writer: Writer, op: CreateRelation, dicts: OpDictionaryIndices): void {
@@ -295,11 +301,17 @@ function encodeUpdateRelation(writer: Writer, op: UpdateRelation, dicts: OpDicti
 function encodeDeleteRelation(writer: Writer, op: DeleteRelation, dicts: OpDictionaryIndices): void {
   writer.writeByte(OP_TYPE_DELETE_RELATION);
   writer.writeVarintNumber(dicts.getObjectIndex(op.id));
+  // context_ref: 0xFFFFFFFF = no context, else index
+  const contextRef = op.context !== undefined ? dicts.addContext(op.context) : NO_CONTEXT_REF;
+  writer.writeVarint(BigInt(contextRef));
 }
 
 function encodeRestoreRelation(writer: Writer, op: RestoreRelation, dicts: OpDictionaryIndices): void {
   writer.writeByte(OP_TYPE_RESTORE_RELATION);
   writer.writeVarintNumber(dicts.getObjectIndex(op.id));
+  // context_ref: 0xFFFFFFFF = no context, else index
+  const contextRef = op.context !== undefined ? dicts.addContext(op.context) : NO_CONTEXT_REF;
+  writer.writeVarint(BigInt(contextRef));
 }
 
 function encodeCreateValueRef(writer: Writer, op: CreateValueRef, dicts: OpDictionaryIndices): void {
@@ -434,12 +446,32 @@ function decodeUnsetLanguage(reader: Reader, dicts: DictionaryLookups): UnsetLan
 
 function decodeDeleteEntity(reader: Reader, dicts: OpDictionaryLookups): DeleteEntity {
   const id = dicts.getObject(reader.readVarintNumber());
-  return { type: "deleteEntity", id };
+  // Read context_ref and resolve to Context
+  const contextRefValue = reader.readVarint();
+  let context: Context | undefined = undefined;
+  if (contextRefValue !== BigInt(NO_CONTEXT_REF)) {
+    const contextIndex = Number(contextRefValue);
+    context = dicts.getContext(contextIndex);
+    if (!context) {
+      throw new DecodeError("E002", `context_ref ${contextIndex} out of bounds`);
+    }
+  }
+  return { type: "deleteEntity", id, context };
 }
 
 function decodeRestoreEntity(reader: Reader, dicts: OpDictionaryLookups): RestoreEntity {
   const id = dicts.getObject(reader.readVarintNumber());
-  return { type: "restoreEntity", id };
+  // Read context_ref and resolve to Context
+  const contextRefValue = reader.readVarint();
+  let context: Context | undefined = undefined;
+  if (contextRefValue !== BigInt(NO_CONTEXT_REF)) {
+    const contextIndex = Number(contextRefValue);
+    context = dicts.getContext(contextIndex);
+    if (!context) {
+      throw new DecodeError("E002", `context_ref ${contextIndex} out of bounds`);
+    }
+  }
+  return { type: "restoreEntity", id, context };
 }
 
 function decodeCreateRelation(reader: Reader, dicts: OpDictionaryLookups): CreateRelation {
@@ -552,12 +584,32 @@ function decodeUpdateRelation(reader: Reader, dicts: OpDictionaryLookups): Updat
 
 function decodeDeleteRelation(reader: Reader, dicts: OpDictionaryLookups): DeleteRelation {
   const id = dicts.getObject(reader.readVarintNumber());
-  return { type: "deleteRelation", id };
+  // Read context_ref and resolve to Context
+  const contextRefValue = reader.readVarint();
+  let context: Context | undefined = undefined;
+  if (contextRefValue !== BigInt(NO_CONTEXT_REF)) {
+    const contextIndex = Number(contextRefValue);
+    context = dicts.getContext(contextIndex);
+    if (!context) {
+      throw new DecodeError("E002", `context_ref ${contextIndex} out of bounds`);
+    }
+  }
+  return { type: "deleteRelation", id, context };
 }
 
 function decodeRestoreRelation(reader: Reader, dicts: OpDictionaryLookups): RestoreRelation {
   const id = dicts.getObject(reader.readVarintNumber());
-  return { type: "restoreRelation", id };
+  // Read context_ref and resolve to Context
+  const contextRefValue = reader.readVarint();
+  let context: Context | undefined = undefined;
+  if (contextRefValue !== BigInt(NO_CONTEXT_REF)) {
+    const contextIndex = Number(contextRefValue);
+    context = dicts.getContext(contextIndex);
+    if (!context) {
+      throw new DecodeError("E002", `context_ref ${contextIndex} out of bounds`);
+    }
+  }
+  return { type: "restoreRelation", id, context };
 }
 
 function decodeCreateValueRef(reader: Reader, dicts: OpDictionaryLookups): CreateValueRef {

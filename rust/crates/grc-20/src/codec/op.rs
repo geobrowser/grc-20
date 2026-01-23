@@ -230,7 +230,21 @@ fn decode_delete_entity<'a>(
         });
     }
     let id = dicts.objects[id_index];
-    Ok(Op::DeleteEntity(DeleteEntity { id }))
+
+    // Read context_ref: 0xFFFFFFFF = no context, else index into contexts[]
+    let context_ref_raw = reader.read_varint("context_ref")? as u32;
+    let context = if context_ref_raw == NO_CONTEXT_REF {
+        None
+    } else {
+        let idx = context_ref_raw as usize;
+        Some(dicts.get_context(idx).ok_or_else(|| DecodeError::IndexOutOfBounds {
+            dict: "contexts",
+            index: idx,
+            size: dicts.contexts.len(),
+        })?.clone())
+    };
+
+    Ok(Op::DeleteEntity(DeleteEntity { id, context }))
 }
 
 fn decode_restore_entity<'a>(
@@ -246,7 +260,21 @@ fn decode_restore_entity<'a>(
         });
     }
     let id = dicts.objects[id_index];
-    Ok(Op::RestoreEntity(RestoreEntity { id }))
+
+    // Read context_ref: 0xFFFFFFFF = no context, else index into contexts[]
+    let context_ref_raw = reader.read_varint("context_ref")? as u32;
+    let context = if context_ref_raw == NO_CONTEXT_REF {
+        None
+    } else {
+        let idx = context_ref_raw as usize;
+        Some(dicts.get_context(idx).ok_or_else(|| DecodeError::IndexOutOfBounds {
+            dict: "contexts",
+            index: idx,
+            size: dicts.contexts.len(),
+        })?.clone())
+    };
+
+    Ok(Op::RestoreEntity(RestoreEntity { id, context }))
 }
 
 fn decode_create_relation<'a>(
@@ -482,7 +510,21 @@ fn decode_delete_relation<'a>(
         });
     }
     let id = dicts.objects[id_index];
-    Ok(Op::DeleteRelation(DeleteRelation { id }))
+
+    // Read context_ref: 0xFFFFFFFF = no context, else index into contexts[]
+    let context_ref_raw = reader.read_varint("context_ref")? as u32;
+    let context = if context_ref_raw == NO_CONTEXT_REF {
+        None
+    } else {
+        let idx = context_ref_raw as usize;
+        Some(dicts.get_context(idx).ok_or_else(|| DecodeError::IndexOutOfBounds {
+            dict: "contexts",
+            index: idx,
+            size: dicts.contexts.len(),
+        })?.clone())
+    };
+
+    Ok(Op::DeleteRelation(DeleteRelation { id, context }))
 }
 
 fn decode_restore_relation<'a>(
@@ -498,7 +540,21 @@ fn decode_restore_relation<'a>(
         });
     }
     let id = dicts.objects[id_index];
-    Ok(Op::RestoreRelation(RestoreRelation { id }))
+
+    // Read context_ref: 0xFFFFFFFF = no context, else index into contexts[]
+    let context_ref_raw = reader.read_varint("context_ref")? as u32;
+    let context = if context_ref_raw == NO_CONTEXT_REF {
+        None
+    } else {
+        let idx = context_ref_raw as usize;
+        Some(dicts.get_context(idx).ok_or_else(|| DecodeError::IndexOutOfBounds {
+            dict: "contexts",
+            index: idx,
+            size: dicts.contexts.len(),
+        })?.clone())
+    };
+
+    Ok(Op::RestoreRelation(RestoreRelation { id, context }))
 }
 
 fn decode_create_value_ref<'a>(
@@ -699,6 +755,14 @@ fn encode_delete_entity(
     writer.write_byte(OP_DELETE_ENTITY);
     let id_index = dict_builder.add_object(de.id);
     writer.write_varint(id_index as u64);
+
+    // Write context_ref: 0xFFFFFFFF = no context, else index into contexts[]
+    let context_ref = match &de.context {
+        Some(ctx) => dict_builder.add_context(ctx) as u32,
+        None => NO_CONTEXT_REF,
+    };
+    writer.write_varint(context_ref as u64);
+
     Ok(())
 }
 
@@ -710,6 +774,14 @@ fn encode_restore_entity(
     writer.write_byte(OP_RESTORE_ENTITY);
     let id_index = dict_builder.add_object(re.id);
     writer.write_varint(id_index as u64);
+
+    // Write context_ref: 0xFFFFFFFF = no context, else index into contexts[]
+    let context_ref = match &re.context {
+        Some(ctx) => dict_builder.add_context(ctx) as u32,
+        None => NO_CONTEXT_REF,
+    };
+    writer.write_varint(context_ref as u64);
+
     Ok(())
 }
 
@@ -882,6 +954,14 @@ fn encode_delete_relation(
     writer.write_byte(OP_DELETE_RELATION);
     let id_index = dict_builder.add_object(dr.id);
     writer.write_varint(id_index as u64);
+
+    // Write context_ref: 0xFFFFFFFF = no context, else index into contexts[]
+    let context_ref = match &dr.context {
+        Some(ctx) => dict_builder.add_context(ctx) as u32,
+        None => NO_CONTEXT_REF,
+    };
+    writer.write_varint(context_ref as u64);
+
     Ok(())
 }
 
@@ -893,6 +973,14 @@ fn encode_restore_relation(
     writer.write_byte(OP_RESTORE_RELATION);
     let id_index = dict_builder.add_object(rr.id);
     writer.write_varint(id_index as u64);
+
+    // Write context_ref: 0xFFFFFFFF = no context, else index into contexts[]
+    let context_ref = match &rr.context {
+        Some(ctx) => dict_builder.add_context(ctx) as u32,
+        None => NO_CONTEXT_REF,
+    };
+    writer.write_varint(context_ref as u64);
+
     Ok(())
 }
 

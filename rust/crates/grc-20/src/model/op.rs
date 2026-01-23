@@ -136,20 +136,24 @@ impl<'a> UpdateEntity<'a> {
 ///
 /// Transitions the entity to DELETED state. Subsequent updates are ignored
 /// until restored via RestoreEntity.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct DeleteEntity {
     /// The entity to delete.
     pub id: Id,
+    /// Optional context for grouping changes (spec Section 4.5).
+    pub context: Option<Context>,
 }
 
 /// Restores a deleted entity (spec Section 3.2).
 ///
 /// Transitions a DELETED entity back to ACTIVE state.
 /// If the entity is ACTIVE or does not exist, this is a no-op.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct RestoreEntity {
     /// The entity to restore.
     pub id: Id,
+    /// Optional context for grouping changes (spec Section 4.5).
+    pub context: Option<Context>,
 }
 
 /// Creates a new relation (spec Section 3.3).
@@ -271,20 +275,24 @@ impl UpdateRelation<'_> {
 ///
 /// Transitions the relation to DELETED state. Does NOT delete the reified entity.
 /// Subsequent updates are ignored until restored via RestoreRelation.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct DeleteRelation {
     /// The relation to delete.
     pub id: Id,
+    /// Optional context for grouping changes (spec Section 4.5).
+    pub context: Option<Context>,
 }
 
 /// Restores a deleted relation (spec Section 3.3).
 ///
 /// Transitions a DELETED relation back to ACTIVE state.
 /// If the relation is ACTIVE or does not exist, this is a no-op.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct RestoreRelation {
     /// The relation to restore.
     pub id: Id,
+    /// Optional context for grouping changes (spec Section 4.5).
+    pub context: Option<Context>,
 }
 
 /// Creates a referenceable ID for a value slot (spec Section 3.4).
@@ -342,7 +350,7 @@ mod tests {
             1
         );
         assert_eq!(Op::UpdateEntity(UpdateEntity::new([0; 16])).op_type(), 2);
-        assert_eq!(Op::DeleteEntity(DeleteEntity { id: [0; 16] }).op_type(), 3);
+        assert_eq!(Op::DeleteEntity(DeleteEntity { id: [0; 16], context: None }).op_type(), 3);
     }
 
     #[test]

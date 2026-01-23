@@ -305,16 +305,19 @@ impl DictionaryBuilder {
 
     /// Adds or gets the index for a context.
     ///
-    /// If the context is new, registers all its IDs to the context_ids dictionary.
+    /// If the context is new, registers all its IDs to the appropriate dictionaries:
+    /// - root_id and edge.to_entity_id go to context_ids dictionary
+    /// - edge.type_id goes to relation_types dictionary (it's a RelationTypeRef)
     /// Returns the index into the contexts array.
     pub fn add_context(&mut self, context: &Context) -> usize {
         if let Some(&idx) = self.context_indices.get(context) {
             idx
         } else {
-            // Register all IDs in the context to context_ids dictionary
+            // Register all IDs in the context to appropriate dictionaries
             self.add_context_id(context.root_id);
             for edge in &context.edges {
-                self.add_context_id(edge.type_id);
+                // type_id is a relation type, not a context ID
+                self.add_relation_type(edge.type_id);
                 self.add_context_id(edge.to_entity_id);
             }
 
@@ -417,7 +420,7 @@ impl DictionaryBuilder {
     /// Each context is encoded as:
     /// - root_id: varint (index into context_ids)
     /// - edge_count: varint
-    /// - edges: for each edge: type_id (varint), to_entity_id (varint)
+    /// - edges: for each edge: type_id (RelationTypeRef), to_entity_id (ContextRef)
     pub fn write_contexts(&self, writer: &mut Writer) {
         writer.write_varint(self.contexts.len() as u64);
         for ctx in &self.contexts {
@@ -430,9 +433,11 @@ impl DictionaryBuilder {
             // Edges
             writer.write_varint(ctx.edges.len() as u64);
             for edge in &ctx.edges {
-                let type_idx = self.context_id_indices.get(&edge.type_id)
+                // type_id is a RelationTypeRef (index into relation_types dictionary)
+                let type_idx = self.relation_type_indices.get(&edge.type_id)
                     .copied()
-                    .expect("context edge type_id must be in context_ids dictionary");
+                    .expect("context edge type_id must be in relation_types dictionary");
+                // to_entity_id is a ContextRef (index into context_ids dictionary)
                 let to_idx = self.context_id_indices.get(&edge.to_entity_id)
                     .copied()
                     .expect("context edge to_entity_id must be in context_ids dictionary");
