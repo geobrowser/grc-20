@@ -34,6 +34,7 @@ pub fn decode_value<'a>(
         DataType::Datetime => decode_datetime(reader),
         DataType::Schedule => decode_schedule(reader),
         DataType::Point => decode_point(reader),
+        DataType::Rect => decode_rect(reader),
         DataType::Embedding => decode_embedding(reader),
     }
 }
@@ -338,9 +339,9 @@ fn decode_point<'a>(reader: &mut Reader<'a>) -> Result<Value<'a>, DecodeError> {
         });
     }
 
-    // Read in wire order: longitude, latitude, altitude (optional)
-    let lon = reader.read_f64("point.lon")?;
+    // Read in wire order: latitude, longitude, altitude (optional)
     let lat = reader.read_f64("point.lat")?;
+    let lon = reader.read_f64("point.lon")?;
     let alt = if ordinate_count == 3 {
         Some(reader.read_f64("point.alt")?)
     } else {
@@ -348,13 +349,13 @@ fn decode_point<'a>(reader: &mut Reader<'a>) -> Result<Value<'a>, DecodeError> {
     };
 
     // Validate bounds
-    if !(-180.0..=180.0).contains(&lon) {
-        return Err(DecodeError::LongitudeOutOfRange { lon });
-    }
     if !(-90.0..=90.0).contains(&lat) {
         return Err(DecodeError::LatitudeOutOfRange { lat });
     }
-    if lon.is_nan() || lat.is_nan() {
+    if !(-180.0..=180.0).contains(&lon) {
+        return Err(DecodeError::LongitudeOutOfRange { lon });
+    }
+    if lat.is_nan() || lon.is_nan() {
         return Err(DecodeError::FloatIsNan);
     }
     if let Some(a) = alt {
@@ -363,7 +364,29 @@ fn decode_point<'a>(reader: &mut Reader<'a>) -> Result<Value<'a>, DecodeError> {
         }
     }
 
-    Ok(Value::Point { lon, lat, alt })
+    Ok(Value::Point { lat, lon, alt })
+}
+
+fn decode_rect<'a>(reader: &mut Reader<'a>) -> Result<Value<'a>, DecodeError> {
+    // RECT: 32 bytes (4 x float64), little-endian
+    // Wire order: min_lat, min_lon, max_lat, max_lon
+    let min_lat = reader.read_f64("rect.min_lat")?;
+    let min_lon = reader.read_f64("rect.min_lon")?;
+    let max_lat = reader.read_f64("rect.max_lat")?;
+    let max_lon = reader.read_f64("rect.max_lon")?;
+
+    // Validate bounds
+    if !(-90.0..=90.0).contains(&min_lat) || !(-90.0..=90.0).contains(&max_lat) {
+        return Err(DecodeError::LatitudeOutOfRange { lat: if !(-90.0..=90.0).contains(&min_lat) { min_lat } else { max_lat } });
+    }
+    if !(-180.0..=180.0).contains(&min_lon) || !(-180.0..=180.0).contains(&max_lon) {
+        return Err(DecodeError::LongitudeOutOfRange { lon: if !(-180.0..=180.0).contains(&min_lon) { min_lon } else { max_lon } });
+    }
+    if min_lat.is_nan() || min_lon.is_nan() || max_lat.is_nan() || max_lon.is_nan() {
+        return Err(DecodeError::FloatIsNan);
+    }
+
+    Ok(Value::Rect { min_lat, min_lon, max_lat, max_lon })
 }
 
 fn decode_embedding<'a>(reader: &mut Reader<'a>) -> Result<Value<'a>, DecodeError> {
@@ -521,12 +544,12 @@ pub fn encode_value(
             // RFC 5545 iCalendar format
             writer.write_string(s);
         }
-        Value::Point { lon, lat, alt } => {
-            if *lon < -180.0 || *lon > 180.0 {
-                return Err(EncodeError::LongitudeOutOfRange { lon: *lon });
-            }
+        Value::Point { lat, lon, alt } => {
             if *lat < -90.0 || *lat > 90.0 {
                 return Err(EncodeError::LatitudeOutOfRange { lat: *lat });
+            }
+            if *lon < -180.0 || *lon > 180.0 {
+                return Err(EncodeError::LongitudeOutOfRange { lon: *lon });
             }
             if lat.is_nan() || lon.is_nan() {
                 return Err(EncodeError::FloatIsNan);
@@ -539,12 +562,29 @@ pub fn encode_value(
             // Write ordinate_count: 2 for 2D, 3 for 3D
             let ordinate_count = if alt.is_some() { 3u8 } else { 2u8 };
             writer.write_byte(ordinate_count);
-            // Write in wire order: longitude, latitude, altitude (optional)
-            writer.write_f64(*lon);
+            // Write in wire order: latitude, longitude, altitude (optional)
             writer.write_f64(*lat);
+            writer.write_f64(*lon);
             if let Some(a) = alt {
                 writer.write_f64(*a);
             }
+        }
+        Value::Rect { min_lat, min_lon, max_lat, max_lon } => {
+            if *min_lat < -90.0 || *min_lat > 90.0 || *max_lat < -90.0 || *max_lat > 90.0 {
+                return Err(EncodeError::LatitudeOutOfRange { lat: if *min_lat < -90.0 || *min_lat > 90.0 { *min_lat } else { *max_lat } });
+            }
+            if *min_lon < -180.0 || *min_lon > 180.0 || *max_lon < -180.0 || *max_lon > 180.0 {
+                return Err(EncodeError::LongitudeOutOfRange { lon: if *min_lon < -180.0 || *min_lon > 180.0 { *min_lon } else { *max_lon } });
+            }
+            if min_lat.is_nan() || min_lon.is_nan() || max_lat.is_nan() || max_lon.is_nan() {
+                return Err(EncodeError::FloatIsNan);
+            }
+            // RECT: 32 bytes (4 x float64), little-endian
+            // Wire order: min_lat, min_lon, max_lat, max_lon
+            writer.write_f64(*min_lat);
+            writer.write_f64(*min_lon);
+            writer.write_f64(*max_lat);
+            writer.write_f64(*max_lon);
         }
         Value::Embedding { sub_type, dims, data } => {
             let expected = sub_type.bytes_for_dims(*dims);
@@ -738,7 +778,7 @@ mod tests {
     #[test]
     fn test_point_roundtrip() {
         // 2D point (no altitude)
-        let value = Value::Point { lon: -122.4194, lat: 37.7749, alt: None };
+        let value = Value::Point { lat: 37.7749, lon: -122.4194, alt: None };
         let dicts = WireDictionaries::default();
         let mut dict_builder = DictionaryBuilder::new();
 
@@ -751,7 +791,7 @@ mod tests {
         assert_eq!(value, decoded);
 
         // 3D point (with altitude)
-        let value_3d = Value::Point { lon: -122.4194, lat: 37.7749, alt: Some(100.0) };
+        let value_3d = Value::Point { lat: 37.7749, lon: -122.4194, alt: Some(100.0) };
         let mut dict_builder = DictionaryBuilder::new();
 
         let mut writer = Writer::new();
@@ -766,21 +806,77 @@ mod tests {
     #[test]
     fn test_point_validation() {
         // Latitude out of range
-        let value = Value::Point { lon: 0.0, lat: 91.0, alt: None };
+        let value = Value::Point { lat: 91.0, lon: 0.0, alt: None };
         let mut dict_builder = DictionaryBuilder::new();
         let mut writer = Writer::new();
         let result = encode_value(&mut writer, &value, &mut dict_builder);
         assert!(result.is_err());
 
         // Longitude out of range
-        let value = Value::Point { lon: 181.0, lat: 0.0, alt: None };
+        let value = Value::Point { lat: 0.0, lon: 181.0, alt: None };
         let mut dict_builder = DictionaryBuilder::new();
         let mut writer = Writer::new();
         let result = encode_value(&mut writer, &value, &mut dict_builder);
         assert!(result.is_err());
 
         // NaN in altitude
-        let value = Value::Point { lon: 0.0, lat: 0.0, alt: Some(f64::NAN) };
+        let value = Value::Point { lat: 0.0, lon: 0.0, alt: Some(f64::NAN) };
+        let mut dict_builder = DictionaryBuilder::new();
+        let mut writer = Writer::new();
+        let result = encode_value(&mut writer, &value, &mut dict_builder);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_rect_roundtrip() {
+        let value = Value::Rect {
+            min_lat: 24.5,
+            min_lon: -125.0,
+            max_lat: 49.4,
+            max_lon: -66.9,
+        };
+        let dicts = WireDictionaries::default();
+        let mut dict_builder = DictionaryBuilder::new();
+
+        let mut writer = Writer::new();
+        encode_value(&mut writer, &value, &mut dict_builder).unwrap();
+
+        let mut reader = Reader::new(writer.as_bytes());
+        let decoded = decode_value(&mut reader, DataType::Rect, &dicts).unwrap();
+
+        assert_eq!(value, decoded);
+    }
+
+    #[test]
+    fn test_rect_validation() {
+        // Latitude out of range
+        let value = Value::Rect { min_lat: -91.0, min_lon: 0.0, max_lat: 0.0, max_lon: 0.0 };
+        let mut dict_builder = DictionaryBuilder::new();
+        let mut writer = Writer::new();
+        let result = encode_value(&mut writer, &value, &mut dict_builder);
+        assert!(result.is_err());
+
+        let value = Value::Rect { min_lat: 0.0, min_lon: 0.0, max_lat: 91.0, max_lon: 0.0 };
+        let mut dict_builder = DictionaryBuilder::new();
+        let mut writer = Writer::new();
+        let result = encode_value(&mut writer, &value, &mut dict_builder);
+        assert!(result.is_err());
+
+        // Longitude out of range
+        let value = Value::Rect { min_lat: 0.0, min_lon: -181.0, max_lat: 0.0, max_lon: 0.0 };
+        let mut dict_builder = DictionaryBuilder::new();
+        let mut writer = Writer::new();
+        let result = encode_value(&mut writer, &value, &mut dict_builder);
+        assert!(result.is_err());
+
+        let value = Value::Rect { min_lat: 0.0, min_lon: 0.0, max_lat: 0.0, max_lon: 181.0 };
+        let mut dict_builder = DictionaryBuilder::new();
+        let mut writer = Writer::new();
+        let result = encode_value(&mut writer, &value, &mut dict_builder);
+        assert!(result.is_err());
+
+        // NaN not allowed
+        let value = Value::Rect { min_lat: f64::NAN, min_lon: 0.0, max_lat: 0.0, max_lon: 0.0 };
         let mut dict_builder = DictionaryBuilder::new();
         let mut writer = Writer::new();
         let result = encode_value(&mut writer, &value, &mut dict_builder);

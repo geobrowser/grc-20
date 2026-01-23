@@ -28,12 +28,15 @@ fn format_value(v: &Value) -> String {
         Value::Time { time_us, offset_min } => format!("TIME(time_us={}, offset={})", time_us, offset_min),
         Value::Datetime { epoch_us, offset_min } => format!("DATETIME(epoch_us={}, offset={})", epoch_us, offset_min),
         Value::Schedule(s) => format!("SCHEDULE({})", s),
-        Value::Point { lon, lat, alt } => {
+        Value::Point { lat, lon, alt } => {
             if let Some(a) = alt {
-                format!("POINT({}, {}, {})", lon, lat, a)
+                format!("POINT({}, {}, {})", lat, lon, a)
             } else {
-                format!("POINT({}, {})", lon, lat)
+                format!("POINT({}, {})", lat, lon)
             }
+        }
+        Value::Rect { min_lat, min_lon, max_lat, max_lon } => {
+            format!("RECT({}, {}, {}, {})", min_lat, min_lon, max_lat, max_lon)
         }
         Value::Bytes(b) => format!("BYTES[{}]", b.len()),
         Value::Decimal { exponent, mantissa, .. } => format!("DECIMAL(e={}, m={:?})", exponent, mantissa),

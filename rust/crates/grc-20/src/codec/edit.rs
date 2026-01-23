@@ -415,7 +415,8 @@ fn value_to_owned(v: crate::model::Value<'_>) -> crate::model::Value<'static> {
         Value::Time { time_us, offset_min } => Value::Time { time_us, offset_min },
         Value::Datetime { epoch_us, offset_min } => Value::Datetime { epoch_us, offset_min },
         Value::Schedule(s) => Value::Schedule(Cow::Owned(s.into_owned())),
-        Value::Point { lon, lat, alt } => Value::Point { lon, lat, alt },
+        Value::Point { lat, lon, alt } => Value::Point { lat, lon, alt },
+        Value::Rect { min_lat, min_lon, max_lat, max_lon } => Value::Rect { min_lat, min_lon, max_lat, max_lon },
         Value::Embedding { sub_type, dims, data } => Value::Embedding {
             sub_type,
             dims,

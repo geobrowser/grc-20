@@ -117,6 +117,25 @@ export function encodeValuePayload(writer: Writer, value: Value): void {
       }
       break;
 
+    case "rect":
+      if (Number.isNaN(value.minLat) || Number.isNaN(value.minLon) ||
+          Number.isNaN(value.maxLat) || Number.isNaN(value.maxLon)) {
+        throw new Error("NaN is not allowed in Rect coordinates");
+      }
+      if (value.minLat < -90 || value.minLat > 90 || value.maxLat < -90 || value.maxLat > 90) {
+        throw new Error("latitude out of range [-90, +90]");
+      }
+      if (value.minLon < -180 || value.minLon > 180 || value.maxLon < -180 || value.maxLon > 180) {
+        throw new Error("longitude out of range [-180, +180]");
+      }
+      // RECT: 32 bytes (4 x float64), little-endian
+      // Wire order: min_lat, min_lon, max_lat, max_lon
+      writer.writeFloat64(value.minLat);
+      writer.writeFloat64(value.minLon);
+      writer.writeFloat64(value.maxLat);
+      writer.writeFloat64(value.maxLon);
+      break;
+
     case "embedding": {
       const expected = embeddingBytesForDims(value.subType, value.dims);
       if (value.data.length !== expected) {
@@ -293,6 +312,26 @@ export function decodeValuePayload(reader: Reader, dataType: DataType): Value {
         throw new DecodeError("E005", "NaN is not allowed in Point altitude");
       }
       return { type: "point", lat, lon, alt };
+    }
+
+    case DataType.Rect: {
+      // RECT: 32 bytes (4 x float64), little-endian
+      // Wire order: min_lat, min_lon, max_lat, max_lon
+      const minLat = reader.readFloat64();
+      const minLon = reader.readFloat64();
+      const maxLat = reader.readFloat64();
+      const maxLon = reader.readFloat64();
+      if (Number.isNaN(minLat) || Number.isNaN(minLon) ||
+          Number.isNaN(maxLat) || Number.isNaN(maxLon)) {
+        throw new DecodeError("E005", "NaN is not allowed in Rect coordinates");
+      }
+      if (minLat < -90 || minLat > 90 || maxLat < -90 || maxLat > 90) {
+        throw new DecodeError("E005", "RECT latitude out of range [-90, +90]");
+      }
+      if (minLon < -180 || minLon > 180 || maxLon < -180 || maxLon > 180) {
+        throw new DecodeError("E005", "RECT longitude out of range [-180, +180]");
+      }
+      return { type: "rect", minLat, minLon, maxLat, maxLon };
     }
 
     case DataType.Embedding: {

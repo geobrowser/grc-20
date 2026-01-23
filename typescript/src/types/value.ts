@@ -20,7 +20,8 @@ export enum DataType {
   Datetime = 9,
   Schedule = 10,
   Point = 11,
-  Embedding = 12,
+  Rect = 12,
+  Embedding = 13,
 }
 
 /**
@@ -86,6 +87,7 @@ export type Value =
     }
   | { type: "schedule"; value: string }
   | { type: "point"; lat: number; lon: number; alt?: number }
+  | { type: "rect"; minLat: number; minLon: number; maxLat: number; maxLon: number }
   | { type: "embedding"; subType: EmbeddingSubType; dims: number; data: Uint8Array };
 
 /**
@@ -115,6 +117,8 @@ export function valueDataType(value: Value): DataType {
       return DataType.Schedule;
     case "point":
       return DataType.Point;
+    case "rect":
+      return DataType.Rect;
     case "embedding":
       return DataType.Embedding;
   }
@@ -175,6 +179,18 @@ export function validateValue(value: Value): string | undefined {
       }
       if (value.alt !== undefined && Number.isNaN(value.alt)) {
         return "NaN is not allowed in Point altitude";
+      }
+      break;
+    case "rect":
+      if (value.minLat < -90 || value.minLat > 90 || value.maxLat < -90 || value.maxLat > 90) {
+        return "latitude out of range [-90, +90]";
+      }
+      if (value.minLon < -180 || value.minLon > 180 || value.maxLon < -180 || value.maxLon > 180) {
+        return "longitude out of range [-180, +180]";
+      }
+      if (Number.isNaN(value.minLat) || Number.isNaN(value.minLon) ||
+          Number.isNaN(value.maxLat) || Number.isNaN(value.maxLon)) {
+        return "NaN is not allowed in Rect coordinates";
       }
       break;
     case "date":

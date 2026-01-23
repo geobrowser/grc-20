@@ -21,7 +21,8 @@ pub enum DataType {
     Datetime = 9,
     Schedule = 10,
     Point = 11,
-    Embedding = 12,
+    Rect = 12,
+    Embedding = 13,
 }
 
 impl DataType {
@@ -39,7 +40,8 @@ impl DataType {
             9 => Some(DataType::Datetime),
             10 => Some(DataType::Schedule),
             11 => Some(DataType::Point),
-            12 => Some(DataType::Embedding),
+            12 => Some(DataType::Rect),
+            13 => Some(DataType::Embedding),
             _ => None,
         }
     }
@@ -178,12 +180,24 @@ pub enum Value<'a> {
 
     /// WGS84 geographic coordinate with optional altitude.
     Point {
-        /// Longitude in degrees (-180 to +180).
-        lon: f64,
         /// Latitude in degrees (-90 to +90).
         lat: f64,
+        /// Longitude in degrees (-180 to +180).
+        lon: f64,
         /// Altitude in meters above WGS84 ellipsoid (optional).
         alt: Option<f64>,
+    },
+
+    /// Axis-aligned bounding box in WGS84 coordinates.
+    Rect {
+        /// Southern edge latitude (-90 to +90).
+        min_lat: f64,
+        /// Western edge longitude (-180 to +180).
+        min_lon: f64,
+        /// Northern edge latitude (-90 to +90).
+        max_lat: f64,
+        /// Eastern edge longitude (-180 to +180).
+        max_lon: f64,
     },
 
     /// Dense vector for semantic similarity search.
@@ -210,6 +224,7 @@ impl Value<'_> {
             Value::Datetime { .. } => DataType::Datetime,
             Value::Schedule(_) => DataType::Schedule,
             Value::Point { .. } => DataType::Point,
+            Value::Rect { .. } => DataType::Rect,
             Value::Embedding { .. } => DataType::Embedding,
         }
     }
@@ -234,20 +249,31 @@ impl Value<'_> {
                     return Some("DECIMAL mantissa has trailing zeros (not normalized)");
                 }
             }
-            Value::Point { lon, lat, alt } => {
-                if *lon < -180.0 || *lon > 180.0 {
-                    return Some("longitude out of range [-180, +180]");
-                }
+            Value::Point { lat, lon, alt } => {
                 if *lat < -90.0 || *lat > 90.0 {
                     return Some("latitude out of range [-90, +90]");
                 }
-                if lon.is_nan() || lat.is_nan() {
+                if *lon < -180.0 || *lon > 180.0 {
+                    return Some("longitude out of range [-180, +180]");
+                }
+                if lat.is_nan() || lon.is_nan() {
                     return Some("NaN is not allowed in Point coordinates");
                 }
                 if let Some(a) = alt {
                     if a.is_nan() {
                         return Some("NaN is not allowed in Point altitude");
                     }
+                }
+            }
+            Value::Rect { min_lat, min_lon, max_lat, max_lon } => {
+                if *min_lat < -90.0 || *min_lat > 90.0 || *max_lat < -90.0 || *max_lat > 90.0 {
+                    return Some("latitude out of range [-90, +90]");
+                }
+                if *min_lon < -180.0 || *min_lon > 180.0 || *max_lon < -180.0 || *max_lon > 180.0 {
+                    return Some("longitude out of range [-180, +180]");
+                }
+                if min_lat.is_nan() || min_lon.is_nan() || max_lat.is_nan() || max_lon.is_nan() {
+                    return Some("NaN is not allowed in Rect coordinates");
                 }
             }
             Value::Date { offset_min, .. } => {
@@ -334,15 +360,29 @@ mod tests {
 
     #[test]
     fn test_value_validation_point() {
-        assert!(Value::Point { lon: 0.0, lat: 91.0, alt: None }.validate().is_some());
-        assert!(Value::Point { lon: 0.0, lat: -91.0, alt: None }.validate().is_some());
-        assert!(Value::Point { lon: 181.0, lat: 0.0, alt: None }.validate().is_some());
-        assert!(Value::Point { lon: -181.0, lat: 0.0, alt: None }.validate().is_some());
-        assert!(Value::Point { lon: 180.0, lat: 90.0, alt: None }.validate().is_none());
-        assert!(Value::Point { lon: -180.0, lat: -90.0, alt: None }.validate().is_none());
+        assert!(Value::Point { lat: 91.0, lon: 0.0, alt: None }.validate().is_some());
+        assert!(Value::Point { lat: -91.0, lon: 0.0, alt: None }.validate().is_some());
+        assert!(Value::Point { lat: 0.0, lon: 181.0, alt: None }.validate().is_some());
+        assert!(Value::Point { lat: 0.0, lon: -181.0, alt: None }.validate().is_some());
+        assert!(Value::Point { lat: 90.0, lon: 180.0, alt: None }.validate().is_none());
+        assert!(Value::Point { lat: -90.0, lon: -180.0, alt: None }.validate().is_none());
         // With altitude
-        assert!(Value::Point { lon: 0.0, lat: 0.0, alt: Some(1000.0) }.validate().is_none());
-        assert!(Value::Point { lon: 0.0, lat: 0.0, alt: Some(f64::NAN) }.validate().is_some());
+        assert!(Value::Point { lat: 0.0, lon: 0.0, alt: Some(1000.0) }.validate().is_none());
+        assert!(Value::Point { lat: 0.0, lon: 0.0, alt: Some(f64::NAN) }.validate().is_some());
+    }
+
+    #[test]
+    fn test_value_validation_rect() {
+        // Invalid latitudes
+        assert!(Value::Rect { min_lat: -91.0, min_lon: 0.0, max_lat: 0.0, max_lon: 0.0 }.validate().is_some());
+        assert!(Value::Rect { min_lat: 0.0, min_lon: 0.0, max_lat: 91.0, max_lon: 0.0 }.validate().is_some());
+        // Invalid longitudes
+        assert!(Value::Rect { min_lat: 0.0, min_lon: -181.0, max_lat: 0.0, max_lon: 0.0 }.validate().is_some());
+        assert!(Value::Rect { min_lat: 0.0, min_lon: 0.0, max_lat: 0.0, max_lon: 181.0 }.validate().is_some());
+        // Valid rect
+        assert!(Value::Rect { min_lat: 24.5, min_lon: -125.0, max_lat: 49.4, max_lon: -66.9 }.validate().is_none());
+        // NaN not allowed
+        assert!(Value::Rect { min_lat: f64::NAN, min_lon: 0.0, max_lat: 0.0, max_lon: 0.0 }.validate().is_some());
     }
 
     #[test]

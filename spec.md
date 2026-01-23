@@ -103,7 +103,7 @@ DataType := BOOL | INT64 | FLOAT64 | DECIMAL | TEXT | BYTES
 | DATE | 7 | Calendar date with timezone |
 | TIME | 8 | Time of day with timezone |
 | DATETIME | 9 | Timestamp with timezone |
-| SCHEDULE | 10 | RFC 5545 schedule or availability |
+| SCHEDULE | 10 | RFC 5545/7953 schedule or availability |
 | POINT | 11 | WGS84 coordinate |
 | RECT | 12 | Axis-aligned bounding box |
 | EMBEDDING | 13 | Dense vector |
@@ -121,7 +121,7 @@ DataType := BOOL | INT64 | FLOAT64 | DECIMAL | TEXT | BYTES
 | DATE | 6 bytes | days_since_epoch (int32) + offset_min (int16) |
 | TIME | 8 bytes | time_us (int48) + offset_min (int16) |
 | DATETIME | 10 bytes | epoch_us (int64) + offset_min (int16) |
-| SCHEDULE | UTF-8 string | RFC 5545 iCalendar component |
+| SCHEDULE | UTF-8 string | RFC 5545/7953 iCalendar content |
 | POINT | 2-3 FLOAT64, little-endian | [lat, lon] or [lat, lon, alt] WGS84 |
 | RECT | 4 FLOAT64, little-endian | [min_lat, min_lon, max_lat, max_lon] WGS84 |
 | EMBEDDING | sub_type + dims + bytes | Dense vector for similarity search |
@@ -233,22 +233,24 @@ The `epoch_us` field represents the instant in UTC. The `offset_min` preserves t
 
 #### SCHEDULE
 
-RFC 5545 iCalendar component for recurring events and availability.
+iCalendar component for recurring events and availability, supporting RFC 5545 (iCalendar) and RFC 7953 (Calendar Availability).
 
 ```
 "DTSTART:20240315T090000Z\nRRULE:FREQ=WEEKLY;BYDAY=MO,WE,FR"   // Weekly on Mon/Wed/Fri
 "DTSTART:20240101\nRRULE:FREQ=YEARLY"                           // Annual event
-"FREEBUSY:20240315T090000Z/20240315T170000Z"                    // Availability window
+"FREEBUSY:20240315T090000Z/20240315T170000Z"                    // Free/busy period
+"BEGIN:VAVAILABILITY\nDTSTART:20240101T090000\nDTEND:20240101T170000\nRRULE:FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR\nEND:VAVAILABILITY"  // Business hours
 ```
 
-**Grammar (NORMATIVE):** SCHEDULE values contain one or more iCalendar properties as defined in RFC 5545. The value MUST be a valid sequence of iCalendar content lines (properties). Common patterns:
+**Grammar (NORMATIVE):** SCHEDULE values contain iCalendar content as defined in RFC 5545 and RFC 7953. Valid forms include:
 
-- **Recurring events:** `DTSTART` with optional `RRULE`, `RDATE`, or `EXDATE`
-- **Availability:** `FREEBUSY` periods
+- **Properties:** One or more iCalendar properties (e.g., `DTSTART` with `RRULE`, `RDATE`, `EXDATE`)
+- **VAVAILABILITY component:** RFC 7953 availability blocks for expressing recurring availability patterns
+- **FREEBUSY periods:** Time ranges indicating free/busy status
 
 **Line folding (NORMATIVE):** Content lines MAY use RFC 5545 line folding (CRLF followed by a space or tab). Implementations MUST unfold before parsing.
 
-**Validation (NORMATIVE):** Implementations MUST validate that the value parses as valid iCalendar properties per RFC 5545. Invalid property names, malformed date-times, or syntax errors MUST be rejected (E005).
+**Validation (NORMATIVE):** Implementations MUST validate that the value parses as valid iCalendar content per RFC 5545 and RFC 7953. Invalid property names, malformed date-times, or syntax errors MUST be rejected (E005).
 
 #### POINT
 
@@ -1246,7 +1248,7 @@ Bytes: len: varint, data: bytes
 Date: days: int32 (LE), offset_min: int16 (LE) — 6 bytes total
 Time: time_us: int48 (LE), offset_min: int16 (LE) — 8 bytes total
 Datetime: epoch_us: int64 (LE), offset_min: int16 (LE) — 10 bytes total
-Schedule: len: varint, data: UTF-8 bytes (RFC 5545)
+Schedule: len: varint, data: UTF-8 bytes (RFC 5545/7953)
 Point: ordinate_count: uint8 (2 or 3), latitude: Float64, longitude: Float64, [altitude: Float64]
 Rect: min_lat: Float64, min_lon: Float64, max_lat: Float64, max_lon: Float64 — 32 bytes total
 Embedding:

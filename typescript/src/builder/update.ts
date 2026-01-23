@@ -97,6 +97,21 @@ export class UpdateEntityBuilder {
   }
 
   /**
+   * Sets a RECT value (axis-aligned bounding box).
+   * @param minLat - Southern edge latitude (-90 to +90)
+   * @param minLon - Western edge longitude (-180 to +180)
+   * @param maxLat - Northern edge latitude (-90 to +90)
+   * @param maxLon - Eastern edge longitude (-180 to +180)
+   */
+  setRect(property: Id, minLat: number, minLon: number, maxLat: number, maxLon: number): this {
+    this._set.push({
+      property,
+      value: { type: "rect", minLat, minLon, maxLat, maxLon },
+    });
+    return this;
+  }
+
+  /**
    * Sets a DATE value.
    * @param value - RFC 3339 date string (e.g., "2024-01-15" or "2024-01-15+05:30")
    */
