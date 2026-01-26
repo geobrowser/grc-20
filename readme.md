@@ -32,21 +32,14 @@ npm install @geoprotocol/grc-20
 ### Rust
 
 ```rust
-<<<<<<< HEAD
-use grc_20::{EditBuilder, encode_edit, decode_edit, genesis::properties};
-=======
 use grc_20::{EditBuilder, encode_edit, decode_edit};
->>>>>>> ba4e0fb (Remove CreateProperty everywhere)
+use grc_20::genesis::properties;
 
 // Create an edit with entities and relations
 let edit = EditBuilder::new(edit_id)
     .name("My Edit")
     .author(author_id)
-<<<<<<< HEAD
     .create_entity(entity_id, |e| e.text(properties::name(), "Hello", None))
-=======
-    .create_entity(entity_id, |e| e.text(name_prop, "Hello", None))
->>>>>>> ba4e0fb (Remove CreateProperty everywhere)
     .build();
 
 // Encode to binary
@@ -59,13 +52,13 @@ let decoded = decode_edit(&bytes)?;
 ### TypeScript
 
 ```typescript
-import { EditBuilder, encodeEdit, decodeEdit } from '@geoprotocol/grc-20';
+import { EditBuilder, encodeEdit, decodeEdit, properties } from '@geoprotocol/grc-20';
 
 // Create an edit
 const edit = new EditBuilder(editId)
   .name('My Edit')
   .author(authorId)
-  .createEntity(entityId, (e) => e.text(nameProp, 'Hello'))
+  .createEntity(entityId, (e) => e.text(properties.name(), 'Hello'))
   .build();
 
 // Encode to binary
