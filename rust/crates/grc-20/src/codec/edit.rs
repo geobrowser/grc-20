@@ -683,6 +683,12 @@ fn validate_edit_inputs(edit: &Edit) -> Result<(), EncodeError> {
                 }
             }
             Op::UpdateRelation(ur) => {
+                let mut seen_unset: FxHashSet<UnsetRelationField> = FxHashSet::default();
+                for field in &ur.unset {
+                    if !seen_unset.insert(*field) {
+                        return Err(EncodeError::InvalidInput { context: "update_relation duplicate unset field" });
+                    }
+                }
                 if ur.unset.contains(&UnsetRelationField::FromSpace) && ur.from_space.is_some() {
                     return Err(EncodeError::InvalidInput { context: "update_relation set/unset overlap" });
                 }
@@ -1256,6 +1262,92 @@ mod tests {
         };
 
         let err = encode_edit(&edit).unwrap_err();
+        assert!(matches!(err, EncodeError::InvalidInput { .. }));
+    }
+
+    #[test]
+    fn test_property_type_mismatch_rejected() {
+        let edit = Edit {
+            id: [1u8; 16],
+            name: Cow::Borrowed(""),
+            authors: vec![],
+            created_at: 0,
+            ops: vec![
+                Op::CreateEntity(CreateEntity {
+                    id: [2u8; 16],
+                    values: vec![PropertyValue {
+                        property: [3u8; 16],
+                        value: Value::Text {
+                            value: Cow::Owned("x".to_string()),
+                            language: None,
+                        },
+                    }],
+                    context: None,
+                }),
+                Op::UpdateEntity(UpdateEntity {
+                    id: [2u8; 16],
+                    set_properties: vec![PropertyValue {
+                        property: [3u8; 16],
+                        value: Value::Int64 { value: 1, unit: None },
+                    }],
+                    unset_values: vec![],
+                    context: None,
+                }),
+            ],
+        };
+
+        let err = encode_edit(&edit).unwrap_err();
+        assert!(matches!(err, EncodeError::InvalidInput { .. }));
+    }
+
+    #[test]
+    fn test_canonical_rejects_duplicate_unset() {
+        let edit = Edit {
+            id: [1u8; 16],
+            name: Cow::Borrowed(""),
+            authors: vec![],
+            created_at: 0,
+            ops: vec![Op::UpdateEntity(UpdateEntity {
+                id: [2u8; 16],
+                set_properties: vec![],
+                unset_values: vec![
+                    UnsetValue {
+                        property: [3u8; 16],
+                        language: UnsetLanguage::English,
+                    },
+                    UnsetValue {
+                        property: [3u8; 16],
+                        language: UnsetLanguage::English,
+                    },
+                ],
+                context: None,
+            })],
+        };
+
+        let err = encode_edit_with_options(&edit, EncodeOptions::canonical()).unwrap_err();
+        assert!(matches!(err, EncodeError::DuplicateUnset { .. }));
+    }
+
+    #[test]
+    fn test_canonical_rejects_duplicate_update_relation_unset_fields() {
+        let edit = Edit {
+            id: [1u8; 16],
+            name: Cow::Borrowed(""),
+            authors: vec![],
+            created_at: 0,
+            ops: vec![Op::UpdateRelation(UpdateRelation {
+                id: [4u8; 16],
+                from_space: None,
+                from_version: None,
+                to_space: None,
+                to_version: None,
+                position: None,
+                unset: vec![UnsetRelationField::FromSpace, UnsetRelationField::FromSpace],
+                context: None,
+            })],
+        };
+
+        let err = encode_edit_with_options(&edit, EncodeOptions::canonical()).unwrap_err();
         assert!(matches!(err, EncodeError::InvalidInput { .. }));
     }
 

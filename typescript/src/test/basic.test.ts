@@ -724,7 +724,7 @@ describe("Codec", () => {
   it("throws when unset language is used for non-text property", () => {
     const editId = randomId();
     const entityId = randomId();
-    const propId = properties.population();
+    const propId = randomId();
 
     const edit: Edit = {
       id: editId,
@@ -747,6 +747,132 @@ describe("Codec", () => {
     };
 
     expect(() => encodeEdit(edit)).toThrow("unset language requires TEXT");
+  });
+
+  it("throws in canonical mode when set contains duplicate property/language", () => {
+    const editId = randomId();
+    const entityId = randomId();
+    const propId = properties.name();
+
+    const edit: Edit = {
+      id: editId,
+      name: "Test Edit",
+      authors: [],
+      createdAt: 0n,
+      ops: [
+        {
+          type: "updateEntity",
+          id: entityId,
+          set: [
+            { property: propId, value: { type: "text", value: "A", language: undefined } },
+            { property: propId, value: { type: "text", value: "B", language: undefined } },
+          ],
+          unset: [],
+        },
+      ],
+    };
+
+    expect(() => encodeEdit(edit, { canonical: true })).toThrow("duplicate (property, language)");
+  });
+
+  it("throws in canonical mode when createEntity has duplicate property/language", () => {
+    const editId = randomId();
+    const entityId = randomId();
+    const propId = properties.name();
+
+    const edit: Edit = {
+      id: editId,
+      name: "Test Edit",
+      authors: [],
+      createdAt: 0n,
+      ops: [
+        {
+          type: "createEntity",
+          id: entityId,
+          values: [
+            { property: propId, value: { type: "text", value: "A", language: undefined } },
+            { property: propId, value: { type: "text", value: "B", language: undefined } },
+          ],
+        },
+      ],
+    };
+
+    expect(() => encodeEdit(edit, { canonical: true })).toThrow("duplicate (property, language)");
+  });
+
+  it("throws in canonical mode when unset contains duplicate property/language", () => {
+    const editId = randomId();
+    const entityId = randomId();
+    const propId = properties.name();
+
+    const edit: Edit = {
+      id: editId,
+      name: "Test Edit",
+      authors: [],
+      createdAt: 0n,
+      ops: [
+        {
+          type: "updateEntity",
+          id: entityId,
+          set: [],
+          unset: [
+            { property: propId, language: { type: "english" } },
+            { property: propId, language: { type: "english" } },
+          ],
+        },
+      ],
+    };
+
+    expect(() => encodeEdit(edit, { canonical: true })).toThrow("duplicate (property, language)");
+  });
+
+  it("throws in canonical mode when updateRelation unset has duplicates", () => {
+    const editId = randomId();
+    const relationId = randomId();
+
+    const edit: Edit = {
+      id: editId,
+      name: "Test Edit",
+      authors: [],
+      createdAt: 0n,
+      ops: [
+        {
+          type: "updateRelation",
+          id: relationId,
+          unset: ["fromSpace", "fromSpace"],
+        },
+      ],
+    };
+
+    expect(() => encodeEdit(edit, { canonical: true })).toThrow("duplicate unset field");
+  });
+
+  it("throws when property type changes across ops", () => {
+    const editId = randomId();
+    const entityId = randomId();
+    const propId = properties.name();
+
+    const edit: Edit = {
+      id: editId,
+      name: "Test Edit",
+      authors: [],
+      createdAt: 0n,
+      ops: [
+        {
+          type: "createEntity",
+          id: entityId,
+          values: [{ property: propId, value: { type: "text", value: "A", language: undefined } }],
+        },
+        {
+          type: "updateEntity",
+          id: entityId,
+          set: [{ property: propId, value: { type: "int64", value: 1n, unit: undefined } }],
+          unset: [],
+        },
+      ],
+    };
+
+    expect(() => encodeEdit(edit)).toThrow("property type mismatch");
   });
 
   it("encodes and decodes all value types", () => {
