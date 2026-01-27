@@ -14,7 +14,10 @@ use crate::limits::{
     FORMAT_VERSION, MAGIC_COMPRESSED, MAGIC_UNCOMPRESSED, MAX_AUTHORS, MAX_DICT_SIZE,
     MAX_EDIT_SIZE, MAX_OPS_PER_EDIT, MAX_STRING_LEN, MIN_FORMAT_VERSION,
 };
-use crate::model::{Context, ContextEdge, DataType, DictionaryBuilder, Edit, Id, Op, WireDictionaries};
+use crate::model::{
+    Context, ContextEdge, DataType, DictionaryBuilder, Edit, Id, Op, UnsetLanguage,
+    UnsetRelationField, WireDictionaries,
+};
 
 // =============================================================================
 // DECODING
@@ -522,6 +525,231 @@ impl EncodeOptions {
     }
 }
 
+fn validate_context_limits(context: &Context) -> Result<(), EncodeError> {
+    if context.edges.len() > MAX_DICT_SIZE {
+        return Err(EncodeError::LengthExceedsLimit {
+            field: "context_edges",
+            len: context.edges.len(),
+            max: MAX_DICT_SIZE,
+        });
+    }
+    Ok(())
+}
+
+/// Encode-time structural validation aligned with spec.md:
+/// - Section 4.3: size limits and dictionary constraints
+/// - Section 4.4: canonical duplicate rules (enforced elsewhere) and author checks
+/// - Section 4.5 / 6.3: context structure and ContextRef requirements
+/// - Section 6.4: op type constraints
+/// - Section 3.2 / 3.6: update set/unset overlap and TEXT-only language slots
+fn validate_edit_inputs(edit: &Edit) -> Result<(), EncodeError> {
+    let name_len = edit.name.as_bytes().len();
+    if name_len > MAX_STRING_LEN {
+        return Err(EncodeError::LengthExceedsLimit {
+            field: "name",
+            len: name_len,
+            max: MAX_STRING_LEN,
+        });
+    }
+    if edit.authors.len() > MAX_AUTHORS {
+        return Err(EncodeError::LengthExceedsLimit {
+            field: "authors",
+            len: edit.authors.len(),
+            max: MAX_AUTHORS,
+        });
+    }
+    if edit.ops.len() > MAX_OPS_PER_EDIT {
+        return Err(EncodeError::LengthExceedsLimit {
+            field: "ops",
+            len: edit.ops.len(),
+            max: MAX_OPS_PER_EDIT,
+        });
+    }
+
+    let mut property_types: FxHashMap<Id, DataType> = FxHashMap::default();
+    let mut deleted_entities: FxHashSet<Id> = FxHashSet::default();
+    let mut deleted_relations: FxHashSet<Id> = FxHashSet::default();
+
+    for op in &edit.ops {
+        match op {
+            Op::CreateEntity(ce) => {
+                if deleted_entities.contains(&ce.id) {
+                    return Err(EncodeError::InvalidInput { context: "delete-then-create entity in same edit" });
+                }
+                if ce.values.len() > crate::limits::MAX_VALUES_PER_ENTITY {
+                    return Err(EncodeError::LengthExceedsLimit {
+                        field: "values",
+                        len: ce.values.len(),
+                        max: crate::limits::MAX_VALUES_PER_ENTITY,
+                    });
+                }
+                for pv in &ce.values {
+                    let dt = pv.value.data_type();
+                    if let Some(existing) = property_types.get(&pv.property) {
+                        if *existing != dt {
+                            return Err(EncodeError::InvalidInput { context: "property type mismatch" });
+                        }
+                    } else {
+                        property_types.insert(pv.property, dt);
+                    }
+                }
+                if let Some(ctx) = &ce.context {
+                    validate_context_limits(ctx)?;
+                }
+            }
+            Op::UpdateEntity(ue) => {
+                if ue.set_properties.len() > crate::limits::MAX_VALUES_PER_ENTITY {
+                    return Err(EncodeError::LengthExceedsLimit {
+                        field: "set_properties",
+                        len: ue.set_properties.len(),
+                        max: crate::limits::MAX_VALUES_PER_ENTITY,
+                    });
+                }
+                if ue.unset_values.len() > crate::limits::MAX_VALUES_PER_ENTITY {
+                    return Err(EncodeError::LengthExceedsLimit {
+                        field: "unset_values",
+                        len: ue.unset_values.len(),
+                        max: crate::limits::MAX_VALUES_PER_ENTITY,
+                    });
+                }
+                let mut set_langs: FxHashMap<Id, FxHashSet<Option<Id>>> = FxHashMap::default();
+                for pv in &ue.set_properties {
+                    let dt = pv.value.data_type();
+                    if let Some(existing) = property_types.get(&pv.property) {
+                        if *existing != dt {
+                            return Err(EncodeError::InvalidInput { context: "property type mismatch" });
+                        }
+                    } else {
+                        property_types.insert(pv.property, dt);
+                    }
+                    let lang_key = match &pv.value {
+                        crate::model::Value::Text { language, .. } => *language,
+                        _ => None,
+                    };
+                    set_langs.entry(pv.property).or_default().insert(lang_key);
+                }
+
+                for unset in &ue.unset_values {
+                    match &unset.language {
+                        UnsetLanguage::All => {
+                            if let Some(existing) = set_langs.get(&unset.property) {
+                                if !existing.is_empty() {
+                                    return Err(EncodeError::InvalidInput { context: "update_entity set/unset overlap" });
+                                }
+                            }
+                        }
+                        UnsetLanguage::English => {
+                            if let Some(existing) = set_langs.get(&unset.property) {
+                                if existing.contains(&None) {
+                                    return Err(EncodeError::InvalidInput { context: "update_entity set/unset overlap" });
+                                }
+                            }
+                            if let Some(existing) = property_types.get(&unset.property) {
+                                if *existing != DataType::Text {
+                                    return Err(EncodeError::InvalidInput { context: "unset language requires TEXT" });
+                                }
+                            } else {
+                                property_types.insert(unset.property, DataType::Text);
+                            }
+                        }
+                        UnsetLanguage::Specific(lang_id) => {
+                            if let Some(existing) = set_langs.get(&unset.property) {
+                                if existing.contains(&Some(*lang_id)) {
+                                    return Err(EncodeError::InvalidInput { context: "update_entity set/unset overlap" });
+                                }
+                            }
+                            if let Some(existing) = property_types.get(&unset.property) {
+                                if *existing != DataType::Text {
+                                    return Err(EncodeError::InvalidInput { context: "unset language requires TEXT" });
+                                }
+                            } else {
+                                property_types.insert(unset.property, DataType::Text);
+                            }
+                        }
+                    }
+                }
+                if let Some(ctx) = &ue.context {
+                    validate_context_limits(ctx)?;
+                }
+            }
+            Op::DeleteEntity(de) => {
+                deleted_entities.insert(de.id);
+                if let Some(ctx) = &de.context {
+                    validate_context_limits(ctx)?;
+                }
+            }
+            Op::RestoreEntity(re) => {
+                if let Some(ctx) = &re.context {
+                    validate_context_limits(ctx)?;
+                }
+            }
+            Op::CreateRelation(cr) => {
+                if deleted_relations.contains(&cr.id) {
+                    return Err(EncodeError::InvalidInput { context: "delete-then-create relation in same edit" });
+                }
+                if let Some(entity) = cr.entity {
+                    if entity == cr.id {
+                        return Err(EncodeError::InvalidInput { context: "relation entity must differ from id" });
+                    }
+                }
+                if let Some(ctx) = &cr.context {
+                    validate_context_limits(ctx)?;
+                }
+            }
+            Op::UpdateRelation(ur) => {
+                let mut seen_unset: FxHashSet<UnsetRelationField> = FxHashSet::default();
+                for field in &ur.unset {
+                    if !seen_unset.insert(*field) {
+                        return Err(EncodeError::InvalidInput { context: "update_relation duplicate unset field" });
+                    }
+                }
+                if ur.unset.contains(&UnsetRelationField::FromSpace) && ur.from_space.is_some() {
+                    return Err(EncodeError::InvalidInput { context: "update_relation set/unset overlap" });
+                }
+                if ur.unset.contains(&UnsetRelationField::FromVersion) && ur.from_version.is_some() {
+                    return Err(EncodeError::InvalidInput { context: "update_relation set/unset overlap" });
+                }
+                if ur.unset.contains(&UnsetRelationField::ToSpace) && ur.to_space.is_some() {
+                    return Err(EncodeError::InvalidInput { context: "update_relation set/unset overlap" });
+                }
+                if ur.unset.contains(&UnsetRelationField::ToVersion) && ur.to_version.is_some() {
+                    return Err(EncodeError::InvalidInput { context: "update_relation set/unset overlap" });
+                }
+                if ur.unset.contains(&UnsetRelationField::Position) && ur.position.is_some() {
+                    return Err(EncodeError::InvalidInput { context: "update_relation set/unset overlap" });
+                }
+                if let Some(ctx) = &ur.context {
+                    validate_context_limits(ctx)?;
+                }
+            }
+            Op::DeleteRelation(dr) => {
+                deleted_relations.insert(dr.id);
+                if let Some(ctx) = &dr.context {
+                    validate_context_limits(ctx)?;
+                }
+            }
+            Op::RestoreRelation(rr) => {
+                if let Some(ctx) = &rr.context {
+                    validate_context_limits(ctx)?;
+                }
+            }
+            Op::CreateValueRef(cvr) => {
+                if cvr.language.is_some() {
+                    if let Some(existing) = property_types.get(&cvr.property) {
+                        if *existing != DataType::Text {
+                            return Err(EncodeError::InvalidInput { context: "create_value_ref language requires TEXT" });
+                        }
+                    } else {
+                        property_types.insert(cvr.property, DataType::Text);
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
 /// Encodes an Edit to binary format (uncompressed).
 ///
 /// Uses single-pass encoding: ops are encoded to a buffer while building
@@ -532,6 +760,7 @@ pub fn encode_edit(edit: &Edit) -> Result<Vec<u8>, EncodeError> {
 
 /// Encodes an Edit to binary format with the given options.
 pub fn encode_edit_with_options(edit: &Edit, options: EncodeOptions) -> Result<Vec<u8>, EncodeError> {
+    validate_edit_inputs(edit)?;
     if options.canonical {
         encode_edit_canonical(edit)
     } else {
@@ -553,6 +782,7 @@ fn encode_edit_fast(edit: &Edit) -> Result<Vec<u8>, EncodeError> {
     for op in &edit.ops {
         encode_op(&mut ops_writer, op, &mut dict_builder, &property_types)?;
     }
+    dict_builder.validate_limits()?;
 
     // Now assemble final output: header + dictionaries + contexts + ops
     let ops_bytes = ops_writer.into_bytes();
@@ -603,6 +833,7 @@ fn encode_edit_canonical(edit: &Edit) -> Result<Vec<u8>, EncodeError> {
     for op in &edit.ops {
         encode_op(&mut temp_writer, op, &mut dict_builder, &property_types)?;
     }
+    dict_builder.validate_limits()?;
 
     // Sort dictionaries and get sorted builder
     let sorted_builder = dict_builder.into_sorted();
@@ -928,7 +1159,10 @@ pub fn encode_edit_compressed_with_options(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{CreateEntity, PropertyValue, Value};
+    use crate::model::{
+        CreateEntity, CreateRelation, CreateValueRef, DeleteEntity, DeleteRelation, PropertyValue,
+        UpdateEntity, UpdateRelation, UnsetLanguage, UnsetRelationField, UnsetValue, Value,
+    };
 
     fn make_test_edit() -> Edit<'static> {
         Edit {
@@ -978,6 +1212,340 @@ mod tests {
         assert_eq!(edit.authors, decoded.authors);
         assert_eq!(edit.created_at, decoded.created_at);
         assert_eq!(edit.ops.len(), decoded.ops.len());
+    }
+
+    #[test]
+    fn test_update_entity_set_unset_overlap_rejected() {
+        let edit = Edit {
+            id: [1u8; 16],
+            name: Cow::Borrowed(""),
+            authors: vec![],
+            created_at: 0,
+            ops: vec![Op::UpdateEntity(UpdateEntity {
+                id: [2u8; 16],
+                set_properties: vec![PropertyValue {
+                    property: [3u8; 16],
+                    value: Value::Text {
+                        value: Cow::Owned("x".to_string()),
+                        language: None,
+                    },
+                }],
+                unset_values: vec![UnsetValue {
+                    property: [3u8; 16],
+                    language: UnsetLanguage::English,
+                }],
+                context: None,
+            })],
+        };
+
+        let err = encode_edit(&edit).unwrap_err();
+        assert!(matches!(err, EncodeError::InvalidInput { .. }));
+    }
+
+    #[test]
+    fn test_unset_language_requires_text() {
+        let edit = Edit {
+            id: [1u8; 16],
+            name: Cow::Borrowed(""),
+            authors: vec![],
+            created_at: 0,
+            ops: vec![Op::UpdateEntity(UpdateEntity {
+                id: [2u8; 16],
+                set_properties: vec![PropertyValue {
+                    property: [3u8; 16],
+                    value: Value::Int64 { value: 1, unit: None },
+                }],
+                unset_values: vec![UnsetValue {
+                    property: [3u8; 16],
+                    language: UnsetLanguage::English,
+                }],
+                context: None,
+            })],
+        };
+
+        let err = encode_edit(&edit).unwrap_err();
+        assert!(matches!(err, EncodeError::InvalidInput { .. }));
+    }
+
+    #[test]
+    fn test_update_relation_set_unset_overlap_rejected() {
+        let edit = Edit {
+            id: [1u8; 16],
+            name: Cow::Borrowed(""),
+            authors: vec![],
+            created_at: 0,
+            ops: vec![Op::UpdateRelation(UpdateRelation {
+                id: [4u8; 16],
+                from_space: Some([5u8; 16]),
+                from_version: None,
+                to_space: None,
+                to_version: None,
+                position: None,
+                unset: vec![UnsetRelationField::FromSpace],
+                context: None,
+            })],
+        };
+
+        let err = encode_edit(&edit).unwrap_err();
+        assert!(matches!(err, EncodeError::InvalidInput { .. }));
+    }
+
+    #[test]
+    fn test_property_type_mismatch_rejected() {
+        let edit = Edit {
+            id: [1u8; 16],
+            name: Cow::Borrowed(""),
+            authors: vec![],
+            created_at: 0,
+            ops: vec![
+                Op::CreateEntity(CreateEntity {
+                    id: [2u8; 16],
+                    values: vec![PropertyValue {
+                        property: [3u8; 16],
+                        value: Value::Text {
+                            value: Cow::Owned("x".to_string()),
+                            language: None,
+                        },
+                    }],
+                    context: None,
+                }),
+                Op::UpdateEntity(UpdateEntity {
+                    id: [2u8; 16],
+                    set_properties: vec![PropertyValue {
+                        property: [3u8; 16],
+                        value: Value::Int64 { value: 1, unit: None },
+                    }],
+                    unset_values: vec![],
+                    context: None,
+                }),
+            ],
+        };
+
+        let err = encode_edit(&edit).unwrap_err();
+        assert!(matches!(err, EncodeError::InvalidInput { .. }));
+    }
+
+    #[test]
+    fn test_delete_then_create_entity_rejected() {
+        let edit = Edit {
+            id: [1u8; 16],
+            name: Cow::Borrowed(""),
+            authors: vec![],
+            created_at: 0,
+            ops: vec![
+                Op::DeleteEntity(DeleteEntity {
+                    id: [2u8; 16],
+                    context: None,
+                }),
+                Op::CreateEntity(CreateEntity {
+                    id: [2u8; 16],
+                    values: vec![],
+                    context: None,
+                }),
+            ],
+        };
+
+        let err = encode_edit(&edit).unwrap_err();
+        assert!(matches!(err, EncodeError::InvalidInput { .. }));
+    }
+
+    #[test]
+    fn test_delete_then_create_relation_rejected() {
+        let edit = Edit {
+            id: [1u8; 16],
+            name: Cow::Borrowed(""),
+            authors: vec![],
+            created_at: 0,
+            ops: vec![
+                Op::DeleteRelation(DeleteRelation {
+                    id: [4u8; 16],
+                    context: None,
+                }),
+                Op::CreateRelation(CreateRelation {
+                    id: [4u8; 16],
+                    relation_type: [5u8; 16],
+                    from: [6u8; 16],
+                    from_is_value_ref: false,
+                    from_space: None,
+                    from_version: None,
+                    to: [7u8; 16],
+                    to_is_value_ref: false,
+                    to_space: None,
+                    to_version: None,
+                    entity: None,
+                    position: None,
+                    context: None,
+                }),
+            ],
+        };
+
+        let err = encode_edit(&edit).unwrap_err();
+        assert!(matches!(err, EncodeError::InvalidInput { .. }));
+    }
+
+    #[test]
+    fn test_create_relation_entity_equals_id_rejected() {
+        let edit = Edit {
+            id: [1u8; 16],
+            name: Cow::Borrowed(""),
+            authors: vec![],
+            created_at: 0,
+            ops: vec![Op::CreateRelation(CreateRelation {
+                id: [4u8; 16],
+                relation_type: [5u8; 16],
+                from: [6u8; 16],
+                from_is_value_ref: false,
+                from_space: None,
+                from_version: None,
+                to: [7u8; 16],
+                to_is_value_ref: false,
+                to_space: None,
+                to_version: None,
+                entity: Some([4u8; 16]),
+                position: None,
+                context: None,
+            })],
+        };
+
+        let err = encode_edit(&edit).unwrap_err();
+        assert!(matches!(err, EncodeError::InvalidInput { .. }));
+    }
+
+    #[test]
+    fn test_create_value_ref_language_requires_text() {
+        let edit = Edit {
+            id: [1u8; 16],
+            name: Cow::Borrowed(""),
+            authors: vec![],
+            created_at: 0,
+            ops: vec![
+                Op::CreateEntity(CreateEntity {
+                    id: [2u8; 16],
+                    values: vec![PropertyValue {
+                        property: [3u8; 16],
+                        value: Value::Int64 { value: 1, unit: None },
+                    }],
+                    context: None,
+                }),
+                Op::CreateValueRef(CreateValueRef {
+                    id: [8u8; 16],
+                    entity: [2u8; 16],
+                    property: [3u8; 16],
+                    language: Some([9u8; 16]),
+                    space: None,
+                }),
+            ],
+        };
+
+        let err = encode_edit(&edit).unwrap_err();
+        assert!(matches!(err, EncodeError::InvalidInput { .. }));
+    }
+
+    #[test]
+    fn test_value_ref_endpoints_not_in_object_ids() {
+        let edit = Edit {
+            id: [1u8; 16],
+            name: Cow::Borrowed(""),
+            authors: vec![],
+            created_at: 0,
+            ops: vec![
+                Op::CreateValueRef(CreateValueRef {
+                    id: [10u8; 16],
+                    entity: [2u8; 16],
+                    property: [3u8; 16],
+                    language: None,
+                    space: None,
+                }),
+                Op::CreateRelation(CreateRelation {
+                    id: [4u8; 16],
+                    relation_type: [5u8; 16],
+                    from: [10u8; 16],
+                    from_is_value_ref: true,
+                    from_space: None,
+                    from_version: None,
+                    to: [2u8; 16],
+                    to_is_value_ref: false,
+                    to_space: None,
+                    to_version: None,
+                    entity: None,
+                    position: None,
+                    context: None,
+                }),
+            ],
+        };
+
+        let encoded = encode_edit(&edit).unwrap();
+        let mut reader = Reader::new(&encoded);
+        reader.read_bytes(4, "magic").unwrap();
+        reader.read_byte("version").unwrap();
+        reader.read_id("edit_id").unwrap();
+        reader.read_string(MAX_STRING_LEN, "name").unwrap();
+        reader.read_id_vec(MAX_AUTHORS, "authors").unwrap();
+        reader.read_signed_varint("created_at").unwrap();
+        let property_count = reader.read_varint("property_count").unwrap() as usize;
+        for _ in 0..property_count {
+            reader.read_id("property_id").unwrap();
+            reader.read_byte("data_type").unwrap();
+        }
+        let _relation_types = read_id_vec_no_duplicates(&mut reader, MAX_DICT_SIZE, "relation_types").unwrap();
+        let _languages = read_id_vec_no_duplicates(&mut reader, MAX_DICT_SIZE, "languages").unwrap();
+        let _units = read_id_vec_no_duplicates(&mut reader, MAX_DICT_SIZE, "units").unwrap();
+        let objects = read_id_vec_no_duplicates(&mut reader, MAX_DICT_SIZE, "objects").unwrap();
+        let _context_ids = read_id_vec_no_duplicates(&mut reader, MAX_DICT_SIZE, "context_ids").unwrap();
+
+        assert!(!objects.contains(&[10u8; 16]));
+        assert!(objects.contains(&[2u8; 16]));
+    }
+
+    #[test]
+    fn test_canonical_rejects_duplicate_unset() {
+        let edit = Edit {
+            id: [1u8; 16],
+            name: Cow::Borrowed(""),
+            authors: vec![],
+            created_at: 0,
+            ops: vec![Op::UpdateEntity(UpdateEntity {
+                id: [2u8; 16],
+                set_properties: vec![],
+                unset_values: vec![
+                    UnsetValue {
+                        property: [3u8; 16],
+                        language: UnsetLanguage::English,
+                    },
+                    UnsetValue {
+                        property: [3u8; 16],
+                        language: UnsetLanguage::English,
+                    },
+                ],
+                context: None,
+            })],
+        };
+
+        let err = encode_edit_with_options(&edit, EncodeOptions::canonical()).unwrap_err();
+        assert!(matches!(err, EncodeError::DuplicateUnset { .. }));
+    }
+
+    #[test]
+    fn test_canonical_rejects_duplicate_update_relation_unset_fields() {
+        let edit = Edit {
+            id: [1u8; 16],
+            name: Cow::Borrowed(""),
+            authors: vec![],
+            created_at: 0,
+            ops: vec![Op::UpdateRelation(UpdateRelation {
+                id: [4u8; 16],
+                from_space: None,
+                from_version: None,
+                to_space: None,
+                to_version: None,
+                position: None,
+                unset: vec![UnsetRelationField::FromSpace, UnsetRelationField::FromSpace],
+                context: None,
+            })],
+        };
+
+        let err = encode_edit_with_options(&edit, EncodeOptions::canonical()).unwrap_err();
+        assert!(matches!(err, EncodeError::InvalidInput { .. }));
     }
 
     #[test]

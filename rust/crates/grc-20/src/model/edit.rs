@@ -7,6 +7,8 @@ use std::borrow::Cow;
 use rustc_hash::FxHashMap;
 
 use crate::codec::primitives::Writer;
+use crate::error::EncodeError;
+use crate::limits::MAX_DICT_SIZE;
 use crate::model::{DataType, Id, Op};
 
 /// An edge in a context path (spec Section 4.5).
@@ -445,6 +447,70 @@ impl DictionaryBuilder {
                 writer.write_varint(to_idx as u64);
             }
         }
+    }
+
+    /// Validates dictionary and context sizes against codec limits.
+    pub fn validate_limits(&self) -> Result<(), EncodeError> {
+        let max = MAX_DICT_SIZE;
+        if self.properties.len() > max {
+            return Err(EncodeError::LengthExceedsLimit {
+                field: "properties",
+                len: self.properties.len(),
+                max,
+            });
+        }
+        if self.relation_types.len() > max {
+            return Err(EncodeError::LengthExceedsLimit {
+                field: "relation_types",
+                len: self.relation_types.len(),
+                max,
+            });
+        }
+        if self.languages.len() > max {
+            return Err(EncodeError::LengthExceedsLimit {
+                field: "languages",
+                len: self.languages.len(),
+                max,
+            });
+        }
+        if self.units.len() > max {
+            return Err(EncodeError::LengthExceedsLimit {
+                field: "units",
+                len: self.units.len(),
+                max,
+            });
+        }
+        if self.objects.len() > max {
+            return Err(EncodeError::LengthExceedsLimit {
+                field: "objects",
+                len: self.objects.len(),
+                max,
+            });
+        }
+        if self.context_ids.len() > max {
+            return Err(EncodeError::LengthExceedsLimit {
+                field: "context_ids",
+                len: self.context_ids.len(),
+                max,
+            });
+        }
+        if self.contexts.len() > max {
+            return Err(EncodeError::LengthExceedsLimit {
+                field: "contexts",
+                len: self.contexts.len(),
+                max,
+            });
+        }
+        for ctx in &self.contexts {
+            if ctx.edges.len() > max {
+                return Err(EncodeError::LengthExceedsLimit {
+                    field: "context_edges",
+                    len: ctx.edges.len(),
+                    max,
+                });
+            }
+        }
+        Ok(())
     }
 
     /// Converts this builder into a sorted canonical form.

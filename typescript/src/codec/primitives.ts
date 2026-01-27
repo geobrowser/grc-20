@@ -74,6 +74,7 @@ export class Writer {
    * @throws Error if the ID is not exactly 16 bytes.
    */
   writeId(id: Id): void {
+    // Higher-level encoders validate IDs up front, but keep this guard for safety.
     if (id.length !== 16) {
       throw new Error(`writeId expects 16-byte ID, got ${id.length} bytes`);
     }
@@ -206,6 +207,19 @@ export class DecodeError extends Error {
   ) {
     super(`[${code}] ${message}`);
     this.name = "DecodeError";
+  }
+}
+
+/**
+ * Encode error with context.
+ */
+export class EncodeError extends Error {
+  constructor(
+    public code: string,
+    message: string
+  ) {
+    super(`[${code}] ${message}`);
+    this.name = "EncodeError";
   }
 }
 

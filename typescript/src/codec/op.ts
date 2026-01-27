@@ -27,7 +27,7 @@ import {
   OP_TYPE_UPDATE_RELATION,
 } from "../types/op.js";
 import type { PropertyValue } from "../types/value.js";
-import { DecodeError, Reader, Writer } from "./primitives.js";
+import { DecodeError, EncodeError, Reader, Writer } from "./primitives.js";
 import {
   decodePropertyValue,
   encodePropertyValue,
@@ -124,6 +124,10 @@ export function encodeOp(writer: Writer, op: Op, dicts: OpDictionaryIndices): vo
     case "createValueRef":
       encodeCreateValueRef(writer, op, dicts);
       break;
+    default: {
+      const typeValue = (op as { type?: string }).type ?? "unknown";
+      throw new EncodeError("E005", `invalid op type: ${typeValue}`);
+    }
   }
 }
 

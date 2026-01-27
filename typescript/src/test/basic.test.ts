@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import type { Edit } from "../index.js";
+import type { Edit, Id } from "../index.js";
 import {
   EditBuilder,
   createEdit,
@@ -33,7 +33,29 @@ import {
   relationTypes,
   languages,
   idsEqual,
+  Reader,
 } from "../index.js";
+
+function readObjectIds(encoded: Uint8Array): Id[] {
+  const reader = new Reader(encoded);
+  reader.readBytes(4);
+  reader.readByte();
+  reader.readId();
+  reader.readString();
+  reader.readIdVec();
+  reader.readSignedVarint();
+  const propCount = reader.readVarintNumber();
+  for (let i = 0; i < propCount; i++) {
+    reader.readId();
+    reader.readByte();
+  }
+  reader.readIdVec(); // relation types
+  reader.readIdVec(); // languages
+  reader.readIdVec(); // units
+  const objects = reader.readIdVec();
+  reader.readIdVec(); // context IDs
+  return objects;
+}
 
 describe("ID utilities", () => {
   it("formatId produces 32 hex chars", () => {
@@ -610,7 +632,7 @@ describe("Codec", () => {
       )
       .build();
 
-    expect(() => encodeEdit(edit)).toThrow("writeId expects 16-byte ID, got 43 bytes");
+    expect(() => encodeEdit(edit)).toThrow("[E005] invalid id for edit.authors[0]");
   });
 
   it("throws when encoding a context with wrong length rootId", () => {
@@ -640,7 +662,7 @@ describe("Codec", () => {
       ],
     };
 
-    expect(() => encodeEdit(edit)).toThrow("writeId expects 16-byte ID, got 43 bytes");
+    expect(() => encodeEdit(edit)).toThrow("[E005] invalid id for op[0].context.rootId");
   });
 
   it("encodes and decodes a simple edit", () => {
@@ -668,6 +690,359 @@ describe("Codec", () => {
     expect(decoded.name).toBe(edit.name);
     expect(decoded.createdAt).toBe(edit.createdAt);
     expect(decoded.ops.length).toBe(edit.ops.length);
+  });
+
+  it("throws when updateEntity set and unset overlap", () => {
+    const editId = randomId();
+    const entityId = randomId();
+    const propId = properties.name();
+
+    const edit: Edit = {
+      id: editId,
+      name: "Test Edit",
+      authors: [],
+      createdAt: 0n,
+      ops: [
+        {
+          type: "updateEntity",
+          id: entityId,
+          set: [
+            {
+              property: propId,
+              value: { type: "text", value: "A", language: undefined },
+            },
+          ],
+          unset: [{ property: propId, language: { type: "english" } }],
+        },
+      ],
+    };
+
+    expect(() => encodeEdit(edit)).toThrow("conflicts with set");
+  });
+
+  it("throws when updateRelation set and unset overlap", () => {
+    const editId = randomId();
+    const relationId = randomId();
+    const spaceId = randomId();
+
+    const edit: Edit = {
+      id: editId,
+      name: "Test Edit",
+      authors: [],
+      createdAt: 0n,
+      ops: [
+        {
+          type: "updateRelation",
+          id: relationId,
+          fromSpace: spaceId,
+          unset: ["fromSpace"],
+        },
+      ],
+    };
+
+    expect(() => encodeEdit(edit)).toThrow("unset contains field also set");
+  });
+
+  it("throws when unset language is used for non-text property", () => {
+    const editId = randomId();
+    const entityId = randomId();
+    const propId = randomId();
+
+    const edit: Edit = {
+      id: editId,
+      name: "Test Edit",
+      authors: [],
+      createdAt: 0n,
+      ops: [
+        {
+          type: "updateEntity",
+          id: entityId,
+          set: [
+            {
+              property: propId,
+              value: { type: "int64", value: 1n, unit: undefined },
+            },
+          ],
+          unset: [{ property: propId, language: { type: "english" } }],
+        },
+      ],
+    };
+
+    expect(() => encodeEdit(edit)).toThrow("unset language requires TEXT");
+  });
+
+  it("throws in canonical mode when set contains duplicate property/language", () => {
+    const editId = randomId();
+    const entityId = randomId();
+    const propId = properties.name();
+
+    const edit: Edit = {
+      id: editId,
+      name: "Test Edit",
+      authors: [],
+      createdAt: 0n,
+      ops: [
+        {
+          type: "updateEntity",
+          id: entityId,
+          set: [
+            { property: propId, value: { type: "text", value: "A", language: undefined } },
+            { property: propId, value: { type: "text", value: "B", language: undefined } },
+          ],
+          unset: [],
+        },
+      ],
+    };
+
+    expect(() => encodeEdit(edit, { canonical: true })).toThrow("duplicate (property, language)");
+  });
+
+  it("throws in canonical mode when createEntity has duplicate property/language", () => {
+    const editId = randomId();
+    const entityId = randomId();
+    const propId = properties.name();
+
+    const edit: Edit = {
+      id: editId,
+      name: "Test Edit",
+      authors: [],
+      createdAt: 0n,
+      ops: [
+        {
+          type: "createEntity",
+          id: entityId,
+          values: [
+            { property: propId, value: { type: "text", value: "A", language: undefined } },
+            { property: propId, value: { type: "text", value: "B", language: undefined } },
+          ],
+        },
+      ],
+    };
+
+    expect(() => encodeEdit(edit, { canonical: true })).toThrow("duplicate (property, language)");
+  });
+
+  it("throws in canonical mode when unset contains duplicate property/language", () => {
+    const editId = randomId();
+    const entityId = randomId();
+    const propId = properties.name();
+
+    const edit: Edit = {
+      id: editId,
+      name: "Test Edit",
+      authors: [],
+      createdAt: 0n,
+      ops: [
+        {
+          type: "updateEntity",
+          id: entityId,
+          set: [],
+          unset: [
+            { property: propId, language: { type: "english" } },
+            { property: propId, language: { type: "english" } },
+          ],
+        },
+      ],
+    };
+
+    expect(() => encodeEdit(edit, { canonical: true })).toThrow("duplicate (property, language)");
+  });
+
+  it("throws in canonical mode when updateRelation unset has duplicates", () => {
+    const editId = randomId();
+    const relationId = randomId();
+
+    const edit: Edit = {
+      id: editId,
+      name: "Test Edit",
+      authors: [],
+      createdAt: 0n,
+      ops: [
+        {
+          type: "updateRelation",
+          id: relationId,
+          unset: ["fromSpace", "fromSpace"],
+        },
+      ],
+    };
+
+    expect(() => encodeEdit(edit, { canonical: true })).toThrow("duplicate field");
+  });
+
+  it("throws when property type changes across ops", () => {
+    const editId = randomId();
+    const entityId = randomId();
+    const propId = properties.name();
+
+    const edit: Edit = {
+      id: editId,
+      name: "Test Edit",
+      authors: [],
+      createdAt: 0n,
+      ops: [
+        {
+          type: "createEntity",
+          id: entityId,
+          values: [{ property: propId, value: { type: "text", value: "A", language: undefined } }],
+        },
+        {
+          type: "updateEntity",
+          id: entityId,
+          set: [{ property: propId, value: { type: "int64", value: 1n, unit: undefined } }],
+          unset: [],
+        },
+      ],
+    };
+
+    expect(() => encodeEdit(edit)).toThrow("property type mismatch");
+  });
+
+  it("throws when deleteEntity is followed by createEntity for same ID", () => {
+    const editId = randomId();
+    const entityId = randomId();
+
+    const edit: Edit = {
+      id: editId,
+      name: "Test Edit",
+      authors: [],
+      createdAt: 0n,
+      ops: [
+        { type: "deleteEntity", id: entityId },
+        { type: "createEntity", id: entityId, values: [] },
+      ],
+    };
+
+    expect(() => encodeEdit(edit)).toThrow("delete-then-create entity");
+  });
+
+  it("throws when deleteRelation is followed by createRelation for same ID", () => {
+    const editId = randomId();
+    const relationId = randomId();
+    const typeId = relationTypes.types();
+    const fromId = randomId();
+    const toId = randomId();
+
+    const edit: Edit = {
+      id: editId,
+      name: "Test Edit",
+      authors: [],
+      createdAt: 0n,
+      ops: [
+        { type: "deleteRelation", id: relationId },
+        { type: "createRelation", id: relationId, relationType: typeId, from: fromId, to: toId },
+      ],
+    };
+
+    expect(() => encodeEdit(edit)).toThrow("delete-then-create relation");
+  });
+
+  it("throws when createRelation entity equals relation id", () => {
+    const editId = randomId();
+    const relationId = randomId();
+    const typeId = relationTypes.types();
+    const fromId = randomId();
+    const toId = randomId();
+
+    const edit: Edit = {
+      id: editId,
+      name: "Test Edit",
+      authors: [],
+      createdAt: 0n,
+      ops: [
+        {
+          type: "createRelation",
+          id: relationId,
+          relationType: typeId,
+          from: fromId,
+          to: toId,
+          entity: relationId,
+        },
+      ],
+    };
+
+    expect(() => encodeEdit(edit)).toThrow("entity must differ");
+  });
+
+  it("throws when createValueRef uses language for non-text property", () => {
+    const editId = randomId();
+    const entityId = randomId();
+    const propId = properties.name();
+    const valueRefId = randomId();
+
+    const edit: Edit = {
+      id: editId,
+      name: "Test Edit",
+      authors: [],
+      createdAt: 0n,
+      ops: [
+        {
+          type: "createEntity",
+          id: entityId,
+          values: [{ property: propId, value: { type: "int64", value: 1n, unit: undefined } }],
+        },
+        {
+          type: "createValueRef",
+          id: valueRefId,
+          entity: entityId,
+          property: propId,
+          language: languages.english(),
+        },
+      ],
+    };
+
+    expect(() => encodeEdit(edit)).toThrow("createValueRef language requires TEXT");
+  });
+
+  it("throws when updateRelation unset has duplicate fields", () => {
+    const editId = randomId();
+    const relationId = randomId();
+
+    const edit: Edit = {
+      id: editId,
+      name: "Test Edit",
+      authors: [],
+      createdAt: 0n,
+      ops: [
+        { type: "updateRelation", id: relationId, unset: ["fromSpace", "fromSpace"] },
+      ],
+    };
+
+    expect(() => encodeEdit(edit)).toThrow("duplicate field");
+  });
+
+  it("does not include value ref endpoints in object_ids", () => {
+    const editId = randomId();
+    const entityId = randomId();
+    const valueRefId = randomId();
+    const typeId = relationTypes.types();
+
+    const edit: Edit = {
+      id: editId,
+      name: "Test Edit",
+      authors: [],
+      createdAt: 0n,
+      ops: [
+        {
+          type: "createValueRef",
+          id: valueRefId,
+          entity: entityId,
+          property: properties.name(),
+        },
+        {
+          type: "createRelation",
+          id: randomId(),
+          relationType: typeId,
+          from: valueRefId,
+          fromIsValueRef: true,
+          to: entityId,
+        },
+      ],
+    };
+
+    const encoded = encodeEdit(edit);
+    const objectIds = readObjectIds(encoded);
+    expect(objectIds.some(id => idsEqual(id, valueRefId))).toBe(false);
+    expect(objectIds.some(id => idsEqual(id, entityId))).toBe(true);
   });
 
   it("encodes and decodes all value types", () => {
@@ -855,8 +1230,32 @@ describe("Codec", () => {
     for (let i = 0; i < encoded1.length; i++) {
       expect(encoded1[i]).toBe(encoded2[i]);
     }
+    });
   });
-});
+
+  it("throws when time or datetime is missing a timezone offset", () => {
+    const editId = randomId();
+    const entityId = randomId();
+
+    const edit: Edit = {
+      id: editId,
+      name: "Test Edit",
+      authors: [],
+      createdAt: 0n,
+      ops: [
+        {
+          type: "createEntity",
+          id: entityId,
+          values: [
+            { property: properties.name(), value: { type: "time", value: "14:30:00" } },
+            { property: properties.description(), value: { type: "datetime", value: "2024-03-15T14:30:00" } },
+          ],
+        },
+      ],
+    };
+
+    expect(() => encodeEdit(edit)).toThrow("Invalid RFC 3339 time");
+  });
 
 describe("Compression", () => {
   it("isCompressed detects GRC2Z magic", () => {

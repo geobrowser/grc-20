@@ -1,8 +1,8 @@
-import { compareIds, type Id } from "../types/id.js";
+import { compareIds, idsEqual, type Id } from "../types/id.js";
 import type { Context, ContextEdge, Edit, WireDictionaries } from "../types/edit.js";
 import type { Op, UnsetLanguage } from "../types/op.js";
 import { DataType, valueDataType, type PropertyValue } from "../types/value.js";
-import { DecodeError, Reader, Writer } from "./primitives.js";
+import { DecodeError, EncodeError, Reader, Writer } from "./primitives.js";
 import { decodeOp, encodeOp, type OpDictionaryIndices, type OpDictionaryLookups } from "./op.js";
 
 // Magic bytes
@@ -12,6 +12,15 @@ const MAGIC_COMPRESSED = new TextEncoder().encode("GRC2Z");
 // Current version
 const VERSION = 0;
 
+// Security limits (match Rust codec limits)
+const MAX_STRING_LEN = 16 * 1024 * 1024;
+const MAX_AUTHORS = 1_000;
+const MAX_DICT_SIZE = 1_000_000;
+const MAX_OPS_PER_EDIT = 1_000_000;
+const MAX_VALUES_PER_ENTITY = 10_000;
+const MAX_POSITION_LEN = 64;
+const POSITION_RE = /^[0-9A-Za-z]+$/;
+
 /**
  * Encoding options.
  */
@@ -20,11 +29,398 @@ export interface EncodeOptions {
   canonical?: boolean;
 }
 
+function assertId(value: unknown, context: string): asserts value is Id {
+  if (!(value instanceof Uint8Array) || value.length !== 16) {
+    throw new EncodeError("E005", `invalid id for ${context}`);
+  }
+}
+
+function validatePosition(pos: string, context: string): void {
+  if (pos.length === 0) {
+    throw new EncodeError("E005", `${context} position cannot be empty`);
+  }
+  if (pos.length > MAX_POSITION_LEN) {
+    throw new EncodeError("E005", `${context} position length ${pos.length} exceeds maximum ${MAX_POSITION_LEN}`);
+  }
+  if (!POSITION_RE.test(pos)) {
+    throw new EncodeError("E005", `${context} position contains invalid characters`);
+  }
+}
+
+function validateContext(ctx: Context, context: string): void {
+  assertId(ctx.rootId, `${context}.rootId`);
+  if (!Array.isArray(ctx.edges)) {
+    throw new EncodeError("E005", `${context}.edges must be an array`);
+  }
+  if (ctx.edges.length > MAX_DICT_SIZE) {
+    throw new EncodeError("E005", `${context}.edges length ${ctx.edges.length} exceeds maximum ${MAX_DICT_SIZE}`);
+  }
+  for (let i = 0; i < ctx.edges.length; i++) {
+    const edge = ctx.edges[i];
+    assertId(edge.typeId, `${context}.edges[${i}].typeId`);
+    assertId(edge.toEntityId, `${context}.edges[${i}].toEntityId`);
+  }
+}
+
+function validateUnsetLanguage(lang: UnsetLanguage, context: string): void {
+  switch (lang.type) {
+    case "all":
+    case "english":
+      return;
+    case "specific":
+      assertId(lang.language, `${context}.language`);
+      return;
+  }
+}
+
+function validatePropertyValue(value: PropertyValue, context: string): void {
+  assertId(value.property, `${context}.property`);
+  if (value.value.type === "text" && value.value.language !== undefined) {
+    assertId(value.value.language, `${context}.value.language`);
+  }
+  if (
+    (value.value.type === "int64" || value.value.type === "float64" || value.value.type === "decimal") &&
+    value.value.unit !== undefined
+  ) {
+    assertId(value.value.unit, `${context}.value.unit`);
+  }
+}
+
+function languageKeyForSetValue(value: PropertyValue): string {
+  if (value.value.type === "text") {
+    return value.value.language ? idKey(value.value.language) : "english";
+  }
+  return "non-text";
+}
+
+function languageKeyForUnset(lang: UnsetLanguage): string {
+  switch (lang.type) {
+    case "all":
+      return "all";
+    case "english":
+      return "english";
+    case "specific":
+      return idKey(lang.language);
+  }
+}
+
+function validateOp(op: Op, index: number): void {
+  const context = `op[${index}]`;
+  switch (op.type) {
+    case "createEntity":
+      assertId(op.id, `${context}.id`);
+      if (!Array.isArray(op.values)) {
+        throw new EncodeError("E005", `${context}.values must be an array`);
+      }
+      if (op.values.length > MAX_VALUES_PER_ENTITY) {
+        throw new EncodeError("E005", `${context}.values length ${op.values.length} exceeds maximum ${MAX_VALUES_PER_ENTITY}`);
+      }
+      for (let i = 0; i < op.values.length; i++) {
+        validatePropertyValue(op.values[i], `${context}.values[${i}]`);
+      }
+      if (op.context !== undefined) {
+        validateContext(op.context, `${context}.context`);
+      }
+      return;
+    case "updateEntity":
+      assertId(op.id, `${context}.id`);
+      if (!Array.isArray(op.set)) {
+        throw new EncodeError("E005", `${context}.set must be an array`);
+      }
+      if (!Array.isArray(op.unset)) {
+        throw new EncodeError("E005", `${context}.unset must be an array`);
+      }
+      if (op.set.length > MAX_VALUES_PER_ENTITY) {
+        throw new EncodeError("E005", `${context}.set length ${op.set.length} exceeds maximum ${MAX_VALUES_PER_ENTITY}`);
+      }
+      if (op.unset.length > MAX_VALUES_PER_ENTITY) {
+        throw new EncodeError("E005", `${context}.unset length ${op.unset.length} exceeds maximum ${MAX_VALUES_PER_ENTITY}`);
+      }
+      for (let i = 0; i < op.set.length; i++) {
+        validatePropertyValue(op.set[i], `${context}.set[${i}]`);
+      }
+      const setKeys = new Map<string, Set<string>>();
+      for (const value of op.set) {
+        const propKey = idKey(value.property);
+        const langKey = languageKeyForSetValue(value);
+        let langs = setKeys.get(propKey);
+        if (!langs) {
+          langs = new Set();
+          setKeys.set(propKey, langs);
+        }
+        langs.add(langKey);
+      }
+      for (let i = 0; i < op.unset.length; i++) {
+        const u = op.unset[i];
+        assertId(u.property, `${context}.unset[${i}].property`);
+        validateUnsetLanguage(u.language, `${context}.unset[${i}].language`);
+        const propKey = idKey(u.property);
+        const langKey = languageKeyForUnset(u.language);
+        const setLangs = setKeys.get(propKey);
+        if (setLangs) {
+          if (langKey === "all") {
+            throw new EncodeError("E005", `${context}.unset[${i}] conflicts with set for property`);
+          }
+          if (setLangs.has(langKey)) {
+            throw new EncodeError("E005", `${context}.unset[${i}] conflicts with set for property/language`);
+          }
+        }
+      }
+      if (op.context !== undefined) {
+        validateContext(op.context, `${context}.context`);
+      }
+      return;
+    case "deleteEntity":
+    case "restoreEntity":
+      assertId(op.id, `${context}.id`);
+      if (op.context !== undefined) {
+        validateContext(op.context, `${context}.context`);
+      }
+      return;
+    case "createRelation":
+      assertId(op.id, `${context}.id`);
+      assertId(op.relationType, `${context}.relationType`);
+      assertId(op.from, `${context}.from`);
+      assertId(op.to, `${context}.to`);
+      if (op.entity !== undefined && idsEqual(op.entity, op.id)) {
+        throw new EncodeError("E005", `${context}.entity must differ from relation id`);
+      }
+      if (op.fromIsValueRef !== undefined && typeof op.fromIsValueRef !== "boolean") {
+        throw new EncodeError("E005", `${context}.fromIsValueRef must be a boolean`);
+      }
+      if (op.toIsValueRef !== undefined && typeof op.toIsValueRef !== "boolean") {
+        throw new EncodeError("E005", `${context}.toIsValueRef must be a boolean`);
+      }
+      if (op.fromSpace !== undefined) assertId(op.fromSpace, `${context}.fromSpace`);
+      if (op.fromVersion !== undefined) assertId(op.fromVersion, `${context}.fromVersion`);
+      if (op.toSpace !== undefined) assertId(op.toSpace, `${context}.toSpace`);
+      if (op.toVersion !== undefined) assertId(op.toVersion, `${context}.toVersion`);
+      if (op.entity !== undefined) assertId(op.entity, `${context}.entity`);
+      if (op.position !== undefined) validatePosition(op.position, context);
+      if (op.context !== undefined) {
+        validateContext(op.context, `${context}.context`);
+      }
+      return;
+    case "updateRelation":
+      assertId(op.id, `${context}.id`);
+      if (op.fromSpace !== undefined) assertId(op.fromSpace, `${context}.fromSpace`);
+      if (op.fromVersion !== undefined) assertId(op.fromVersion, `${context}.fromVersion`);
+      if (op.toSpace !== undefined) assertId(op.toSpace, `${context}.toSpace`);
+      if (op.toVersion !== undefined) assertId(op.toVersion, `${context}.toVersion`);
+      if (op.position !== undefined) validatePosition(op.position, context);
+      if (op.unset !== undefined) {
+        const allowed = new Set(["fromSpace", "fromVersion", "toSpace", "toVersion", "position"]);
+        const seen = new Set<string>();
+        for (const field of op.unset) {
+          if (!allowed.has(field)) {
+            throw new EncodeError("E005", `${context}.unset contains invalid field: ${field}`);
+          }
+          if (seen.has(field)) {
+            throw new EncodeError("E005", `${context}.unset contains duplicate field: ${field}`);
+          }
+          seen.add(field);
+          if (
+            (field === "fromSpace" && op.fromSpace !== undefined) ||
+            (field === "fromVersion" && op.fromVersion !== undefined) ||
+            (field === "toSpace" && op.toSpace !== undefined) ||
+            (field === "toVersion" && op.toVersion !== undefined) ||
+            (field === "position" && op.position !== undefined)
+          ) {
+            throw new EncodeError("E005", `${context}.unset contains field also set in op`);
+          }
+        }
+      }
+      if (op.context !== undefined) {
+        validateContext(op.context, `${context}.context`);
+      }
+      return;
+    case "deleteRelation":
+    case "restoreRelation":
+      assertId(op.id, `${context}.id`);
+      if (op.context !== undefined) {
+        validateContext(op.context, `${context}.context`);
+      }
+      return;
+    case "createValueRef": {
+      const opAny = op as unknown as { context?: unknown };
+      if (opAny.context !== undefined) {
+        throw new EncodeError("E005", `${context}.context is not allowed for createValueRef`);
+      }
+      assertId(op.id, `${context}.id`);
+      assertId(op.entity, `${context}.entity`);
+      assertId(op.property, `${context}.property`);
+      if (op.language !== undefined) assertId(op.language, `${context}.language`);
+      if (op.space !== undefined) assertId(op.space, `${context}.space`);
+      return;
+    }
+    default: {
+      const typeValue = (op as { type?: string }).type ?? "unknown";
+      throw new EncodeError("E005", `${context} has invalid op type: ${typeValue}`);
+    }
+  }
+}
+
+/**
+ * Encode-time structural validation aligned with spec.md:
+ * - Section 4.3: dictionary membership, size limits, ID shape
+ * - Section 4.4: canonical rules (sorted lists, no duplicates)
+ * - Section 4.5 / 6.3: context structure and ContextRef requirements
+ * - Section 6.4: op type whitelist and context_ref support rules
+ * - Section 3.2 / 3.6: update set/unset overlap and TEXT-only language slots
+ */
+function validateEdit(edit: Edit, canonical: boolean): void {
+  assertId(edit.id, "edit.id");
+  if (typeof edit.name !== "string") {
+    throw new EncodeError("E005", "edit.name must be a string");
+  }
+  const nameBytes = new TextEncoder().encode(edit.name).length;
+  if (nameBytes > MAX_STRING_LEN) {
+    throw new EncodeError("E005", `edit.name length ${nameBytes} exceeds maximum ${MAX_STRING_LEN}`);
+  }
+  if (!Array.isArray(edit.authors)) {
+    throw new EncodeError("E005", "edit.authors must be an array");
+  }
+  if (edit.authors.length > MAX_AUTHORS) {
+    throw new EncodeError("E005", `edit.authors length ${edit.authors.length} exceeds maximum ${MAX_AUTHORS}`);
+  }
+  for (let i = 0; i < edit.authors.length; i++) {
+    assertId(edit.authors[i], `edit.authors[${i}]`);
+  }
+  if (canonical) {
+    const sorted = [...edit.authors].sort(compareIds);
+    for (let i = 1; i < sorted.length; i++) {
+      if (compareIds(sorted[i - 1], sorted[i]) === 0) {
+        throw new EncodeError("E005", "edit.authors contains duplicate IDs in canonical mode");
+      }
+    }
+  }
+  if (typeof edit.createdAt !== "bigint") {
+    throw new EncodeError("E005", "edit.createdAt must be a bigint");
+  }
+  if (!Array.isArray(edit.ops)) {
+    throw new EncodeError("E005", "edit.ops must be an array");
+  }
+  if (edit.ops.length > MAX_OPS_PER_EDIT) {
+    throw new EncodeError("E005", `edit.ops length ${edit.ops.length} exceeds maximum ${MAX_OPS_PER_EDIT}`);
+  }
+  const propertyTypes = new Map<string, DataType>();
+  const deletedEntities = new Set<string>();
+  const deletedRelations = new Set<string>();
+  for (let i = 0; i < edit.ops.length; i++) {
+    const op = edit.ops[i];
+    validateOp(op, i);
+    if (op.type === "createEntity") {
+      const idKeyValue = idKey(op.id);
+      if (deletedEntities.has(idKeyValue)) {
+        throw new EncodeError("E005", "delete-then-create entity in same edit");
+      }
+      for (const pv of op.values) {
+        const key = idKey(pv.property);
+        const dt = valueDataType(pv.value);
+        const existing = propertyTypes.get(key);
+        if (existing !== undefined && existing !== dt) {
+          throw new EncodeError("E005", `property type mismatch for ${key}`);
+        }
+        propertyTypes.set(key, dt);
+      }
+    } else if (op.type === "updateEntity") {
+      for (const pv of op.set) {
+        const key = idKey(pv.property);
+        const dt = valueDataType(pv.value);
+        const existing = propertyTypes.get(key);
+        if (existing !== undefined && existing !== dt) {
+          throw new EncodeError("E005", `property type mismatch for ${key}`);
+        }
+        propertyTypes.set(key, dt);
+      }
+      for (const u of op.unset) {
+        if (u.language.type !== "all") {
+          const key = idKey(u.property);
+          const existing = propertyTypes.get(key);
+          if (existing !== undefined && existing !== DataType.Text) {
+            throw new EncodeError("E005", `unset language requires TEXT property for ${key}`);
+          }
+          if (existing === undefined) {
+            propertyTypes.set(key, DataType.Text);
+          }
+        }
+      }
+    } else if (op.type === "deleteEntity") {
+      deletedEntities.add(idKey(op.id));
+    } else if (op.type === "createRelation") {
+      const idKeyValue = idKey(op.id);
+      if (deletedRelations.has(idKeyValue)) {
+        throw new EncodeError("E005", "delete-then-create relation in same edit");
+      }
+    } else if (op.type === "deleteRelation") {
+      deletedRelations.add(idKey(op.id));
+    } else if (op.type === "createValueRef") {
+      if (op.language !== undefined) {
+        const key = idKey(op.property);
+        const existing = propertyTypes.get(key);
+        if (existing !== undefined && existing !== DataType.Text) {
+          throw new EncodeError("E005", `createValueRef language requires TEXT property for ${key}`);
+        }
+        if (existing === undefined) {
+          propertyTypes.set(key, DataType.Text);
+        }
+      }
+    }
+  }
+
+  if (canonical) {
+    const makeSetKey = (value: PropertyValue): string =>
+      `${idKey(value.property)}|${languageKeyForSetValue(value)}`;
+    const makeUnsetKey = (unset: UnsetLanguage, property: Id): string =>
+      `${idKey(property)}|${languageKeyForUnset(unset)}`;
+
+    for (const op of edit.ops) {
+      if (op.type === "createEntity") {
+        const seen = new Set<string>();
+        for (const pv of op.values) {
+          const key = makeSetKey(pv);
+          if (seen.has(key)) {
+            throw new EncodeError("E005", "duplicate (property, language) in createEntity.values (canonical)");
+          }
+          seen.add(key);
+        }
+      } else if (op.type === "updateEntity") {
+        const seenSet = new Set<string>();
+        for (const pv of op.set) {
+          const key = makeSetKey(pv);
+          if (seenSet.has(key)) {
+            throw new EncodeError("E005", "duplicate (property, language) in updateEntity.set (canonical)");
+          }
+          seenSet.add(key);
+        }
+        const seenUnset = new Set<string>();
+        for (const u of op.unset) {
+          const key = makeUnsetKey(u.language, u.property);
+          if (seenUnset.has(key)) {
+            throw new EncodeError("E005", "duplicate (property, language) in updateEntity.unset (canonical)");
+          }
+          seenUnset.add(key);
+        }
+      } else if (op.type === "updateRelation" && op.unset) {
+        const seen = new Set<string>();
+        for (const field of op.unset) {
+          if (seen.has(field)) {
+            throw new EncodeError("E005", "duplicate unset field in updateRelation (canonical)");
+          }
+          seen.add(field);
+        }
+      }
+    }
+  }
+}
+
 /**
  * Encodes an Edit to binary format.
  */
 export function encodeEdit(edit: Edit, options?: EncodeOptions): Uint8Array {
   const canonical = options?.canonical ?? false;
+
+  validateEdit(edit, canonical);
 
   // Build dictionaries by scanning all ops (contexts are collected from ops)
   let dicts = buildDictionaries(edit.ops);
@@ -34,16 +430,99 @@ export function encodeEdit(edit: Edit, options?: EncodeOptions): Uint8Array {
     dicts = sortDictionaries(dicts);
   }
 
+  const canonicalizeOps = (ops: Op[]): Op[] => {
+    const sortedOps: Op[] = [];
+    for (const op of ops) {
+      if (op.type === "createEntity") {
+        const values = [...op.values].sort((a, b) => {
+          const propCmp = compareIds(a.property, b.property);
+          if (propCmp !== 0) return propCmp;
+          const aLang = a.value.type === "text" ? a.value.language : undefined;
+          const bLang = b.value.type === "text" ? b.value.language : undefined;
+          if (aLang === undefined && bLang === undefined) return 0;
+          if (aLang === undefined) return -1;
+          if (bLang === undefined) return 1;
+          return compareIds(aLang, bLang);
+        });
+        sortedOps.push({ ...op, values });
+      } else if (op.type === "updateEntity") {
+        const set = [...op.set].sort((a, b) => {
+          const propCmp = compareIds(a.property, b.property);
+          if (propCmp !== 0) return propCmp;
+          const aLang = a.value.type === "text" ? a.value.language : undefined;
+          const bLang = b.value.type === "text" ? b.value.language : undefined;
+          if (aLang === undefined && bLang === undefined) return 0;
+          if (aLang === undefined) return -1;
+          if (bLang === undefined) return 1;
+          return compareIds(aLang, bLang);
+        });
+        const unset = [...op.unset].sort((a, b) => {
+          const propCmp = compareIds(a.property, b.property);
+          if (propCmp !== 0) return propCmp;
+          const aKey = languageKeyForUnset(a.language);
+          const bKey = languageKeyForUnset(b.language);
+          if (aKey === bKey) return 0;
+          if (aKey === "all") return 1;
+          if (bKey === "all") return -1;
+          if (aKey === "english") return bKey === "english" ? 0 : -1;
+          if (bKey === "english") return 1;
+          return aKey.localeCompare(bKey);
+        });
+        sortedOps.push({ ...op, set, unset });
+      } else {
+        sortedOps.push(op);
+      }
+    }
+    return sortedOps;
+  };
+
+  const opsToEncode = canonical ? canonicalizeOps(edit.ops) : edit.ops;
+
   // Create dictionary indices (with context collection support)
   const { indices, getContexts } = createDictionaryIndices(dicts);
 
   // First pass: encode ops to collect contexts
-  const opsWriter = new Writer(edit.ops.length * 50);
-  for (const op of edit.ops) {
+  const opsWriter = new Writer(opsToEncode.length * 50);
+  for (const op of opsToEncode) {
     encodeOp(opsWriter, op, indices);
   }
   const opsBytes = opsWriter.finish();
   const contexts = getContexts();
+
+  if (dicts.properties.size > MAX_DICT_SIZE) {
+    throw new EncodeError("E005", `properties dictionary size ${dicts.properties.size} exceeds maximum ${MAX_DICT_SIZE}`);
+  }
+  if (dicts.relationTypes.size > MAX_DICT_SIZE) {
+    throw new EncodeError("E005", `relationTypes dictionary size ${dicts.relationTypes.size} exceeds maximum ${MAX_DICT_SIZE}`);
+  }
+  if (dicts.languages.size > MAX_DICT_SIZE) {
+    throw new EncodeError("E005", `languages dictionary size ${dicts.languages.size} exceeds maximum ${MAX_DICT_SIZE}`);
+  }
+  if (dicts.units.size > MAX_DICT_SIZE) {
+    throw new EncodeError("E005", `units dictionary size ${dicts.units.size} exceeds maximum ${MAX_DICT_SIZE}`);
+  }
+  if (dicts.objects.size > MAX_DICT_SIZE) {
+    throw new EncodeError("E005", `objects dictionary size ${dicts.objects.size} exceeds maximum ${MAX_DICT_SIZE}`);
+  }
+  if (dicts.contextIds.size > MAX_DICT_SIZE) {
+    throw new EncodeError("E005", `contextIds dictionary size ${dicts.contextIds.size} exceeds maximum ${MAX_DICT_SIZE}`);
+  }
+  if (contexts.length > MAX_DICT_SIZE) {
+    throw new EncodeError("E005", `contexts length ${contexts.length} exceeds maximum ${MAX_DICT_SIZE}`);
+  }
+  for (let i = 0; i < contexts.length; i++) {
+    validateContext(contexts[i], `contexts[${i}]`);
+    // Ensure indices are resolvable (dictionary requirement).
+    try {
+      indices.getContextIdIndex(contexts[i].rootId);
+      for (const edge of contexts[i].edges) {
+        indices.getRelationTypeIndex(edge.typeId);
+        indices.getContextIdIndex(edge.toEntityId);
+      }
+    } catch (err) {
+      throw new EncodeError("E005", `context dictionary validation failed: ${(err as Error).message}`);
+    }
+  }
 
   // Write to buffer
   const writer = new Writer(1024);
@@ -71,7 +550,7 @@ export function encodeEdit(edit: Edit, options?: EncodeOptions): Uint8Array {
   writeContexts(writer, contexts, indices);
 
   // Operations (already encoded)
-  writer.writeVarintNumber(edit.ops.length);
+  writer.writeVarintNumber(opsToEncode.length);
   writer.writeBytes(opsBytes);
 
   return writer.finish();
@@ -244,8 +723,12 @@ function buildDictionaries(ops: Op[]): DictionaryBuilder {
       case "createRelation":
         // For unique mode, compute the derived ID and add to objects if referenced later
         addRelationType(op.relationType);
-        addObject(op.from);
-        addObject(op.to);
+        if (!op.fromIsValueRef) {
+          addObject(op.from);
+        }
+        if (!op.toIsValueRef) {
+          addObject(op.to);
+        }
         // Many mode ID is inline
         // Entity is inline if present
         break;
@@ -255,6 +738,17 @@ function buildDictionaries(ops: Op[]): DictionaryBuilder {
       case "restoreRelation":
         addObject(op.id);
         break;
+      case "createValueRef":
+        addObject(op.entity);
+        addProperty(op.property, op.language ? DataType.Text : DataType.Bool);
+        if (op.language) {
+          addLanguage(op.language);
+        }
+        break;
+      default: {
+        const typeValue = (op as { type?: string }).type ?? "unknown";
+        throw new EncodeError("E005", `invalid op type: ${typeValue}`);
+      }
     }
   }
 

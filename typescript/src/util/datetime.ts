@@ -141,11 +141,14 @@ export function formatDateRfc3339(days: number, offsetMin: number = 0): string {
 /**
  * Parses an RFC 3339 time string (HH:MM:SS[.ssssss][Z|+HH:MM]) and returns
  * microseconds since midnight and offset in minutes.
+ *
+ * Spec: TIME value definition (spec.md "TIME" section) requires offset_min;
+ * reject inputs without explicit timezone (Z or ±HH:MM).
  */
 export function parseTimeRfc3339(timeStr: string): { timeMicros: bigint; offsetMin: number } {
   // Match HH:MM:SS[.fractional][timezone]
   const match = timeStr.match(
-    /^(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,6}))?(Z|[+-]\d{2}:\d{2})?$/
+    /^(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,6}))?(Z|[+-]\d{2}:\d{2})$/
   );
   if (!match) {
     throw new Error(`Invalid RFC 3339 time: ${timeStr}`);
@@ -156,6 +159,9 @@ export function parseTimeRfc3339(timeStr: string): { timeMicros: bigint; offsetM
   const seconds = parseInt(match[3], 10);
   const fractional = match[4];
   const offsetStr = match[5];
+  if (!offsetStr) {
+    throw new Error(`Timezone offset required in time: ${timeStr}`);
+  }
 
   // Validate ranges
   if (hours > 23) {
@@ -180,7 +186,7 @@ export function parseTimeRfc3339(timeStr: string): { timeMicros: bigint; offsetM
     throw new Error(`Time exceeds maximum (23:59:59.999999): ${timeStr}`);
   }
 
-  const offsetMin = offsetStr ? parseTimezoneOffset(offsetStr) : 0;
+  const offsetMin = parseTimezoneOffset(offsetStr);
 
   return { timeMicros, offsetMin };
 }
@@ -212,11 +218,14 @@ export function formatTimeRfc3339(timeMicros: bigint, offsetMin: number = 0): st
 /**
  * Parses an RFC 3339 datetime string and returns microseconds since Unix epoch
  * and offset in minutes.
+ *
+ * Spec: DATETIME value definition (spec.md "DATETIME" section) requires offset_min;
+ * reject inputs without explicit timezone (Z or ±HH:MM).
  */
 export function parseDatetimeRfc3339(datetimeStr: string): { epochMicros: bigint; offsetMin: number } {
   // Match YYYY-MM-DDTHH:MM:SS[.fractional][timezone]
   const match = datetimeStr.match(
-    /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,6}))?(Z|[+-]\d{2}:\d{2})?$/
+    /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,6}))?(Z|[+-]\d{2}:\d{2})$/
   );
   if (!match) {
     throw new Error(`Invalid RFC 3339 datetime: ${datetimeStr}`);
@@ -230,6 +239,9 @@ export function parseDatetimeRfc3339(datetimeStr: string): { epochMicros: bigint
   const seconds = parseInt(match[6], 10);
   const fractional = match[7];
   const offsetStr = match[8];
+  if (!offsetStr) {
+    throw new Error(`Timezone offset required in datetime: ${datetimeStr}`);
+  }
 
   // Validate ranges
   if (month < 1 || month > 12) {
@@ -248,7 +260,7 @@ export function parseDatetimeRfc3339(datetimeStr: string): { epochMicros: bigint
     throw new Error(`Invalid seconds in datetime: ${datetimeStr}`);
   }
 
-  const offsetMin = offsetStr ? parseTimezoneOffset(offsetStr) : 0;
+  const offsetMin = parseTimezoneOffset(offsetStr);
   const microseconds = parseFractionalSeconds(fractional);
 
   // Calculate epoch milliseconds in UTC
