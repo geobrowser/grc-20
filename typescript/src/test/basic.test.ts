@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import type { Edit } from "../index.js";
 import {
   EditBuilder,
   createEdit,
@@ -592,6 +593,56 @@ describe("Builder vs Ops API Equivalence", () => {
 });
 
 describe("Codec", () => {
+  it("throws when encoding an ID with wrong length", () => {
+    const editId = randomId();
+    const entityId = randomId();
+
+    // Create an edit with a malformed author ID (43 bytes instead of 16)
+    const malformedAuthorId = new TextEncoder().encode(
+      "*0x635bd835b6f6f9f1E9fB118C60811D9DBc704635"
+    ) as unknown as ReturnType<typeof randomId>;
+
+    const edit = new EditBuilder(editId)
+      .setName("Test Edit")
+      .addAuthor(malformedAuthorId)
+      .createEntity(entityId, (e) =>
+        e.text(properties.name(), "Test", undefined)
+      )
+      .build();
+
+    expect(() => encodeEdit(edit)).toThrow("writeId expects 16-byte ID, got 43 bytes");
+  });
+
+  it("throws when encoding a context with wrong length rootId", () => {
+    const editId = randomId();
+    const entityId = randomId();
+
+    // Create a malformed context rootId (43 bytes instead of 16)
+    const malformedRootId = new TextEncoder().encode(
+      "*0x635bd835b6f6f9f1E9fB118C60811D9DBc704635"
+    ) as unknown as ReturnType<typeof randomId>;
+
+    const edit: Edit = {
+      id: editId,
+      name: "Test Edit",
+      authors: [],
+      createdAt: 0n,
+      ops: [
+        {
+          type: "createEntity",
+          id: entityId,
+          values: [],
+          context: {
+            rootId: malformedRootId,
+            edges: [],
+          },
+        },
+      ],
+    };
+
+    expect(() => encodeEdit(edit)).toThrow("writeId expects 16-byte ID, got 43 bytes");
+  });
+
   it("encodes and decodes a simple edit", () => {
     const editId = randomId();
     const entityId = randomId();

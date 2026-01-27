@@ -71,8 +71,12 @@ export class Writer {
 
   /**
    * Writes a 16-byte UUID (raw, no length prefix).
+   * @throws Error if the ID is not exactly 16 bytes.
    */
   writeId(id: Id): void {
+    if (id.length !== 16) {
+      throw new Error(`writeId expects 16-byte ID, got ${id.length} bytes`);
+    }
     this.writeBytes(id);
   }
 
