@@ -210,6 +210,19 @@ export class DecodeError extends Error {
 }
 
 /**
+ * Encode error with context.
+ */
+export class EncodeError extends Error {
+  constructor(
+    public code: string,
+    message: string
+  ) {
+    super(`[${code}] ${message}`);
+    this.name = "EncodeError";
+  }
+}
+
+/**
  * Binary reader for decoding GRC-20 data.
  */
 export class Reader {

@@ -8,6 +8,7 @@ export {
   Writer,
   Reader,
   DecodeError,
+  EncodeError,
   zigzagEncode,
   zigzagDecode,
 } from "./primitives.js";

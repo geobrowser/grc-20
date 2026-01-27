@@ -610,7 +610,7 @@ describe("Codec", () => {
       )
       .build();
 
-    expect(() => encodeEdit(edit)).toThrow("writeId expects 16-byte ID, got 43 bytes");
+    expect(() => encodeEdit(edit)).toThrow("[E005] invalid id for edit.authors[0]");
   });
 
   it("throws when encoding a context with wrong length rootId", () => {
@@ -640,7 +640,7 @@ describe("Codec", () => {
       ],
     };
 
-    expect(() => encodeEdit(edit)).toThrow("writeId expects 16-byte ID, got 43 bytes");
+    expect(() => encodeEdit(edit)).toThrow("[E005] invalid id for op[0].context.rootId");
   });
 
   it("encodes and decodes a simple edit", () => {

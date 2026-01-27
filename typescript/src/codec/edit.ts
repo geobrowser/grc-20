@@ -2,7 +2,7 @@ import { compareIds, type Id } from "../types/id.js";
 import type { Context, ContextEdge, Edit, WireDictionaries } from "../types/edit.js";
 import type { Op, UnsetLanguage } from "../types/op.js";
 import { DataType, valueDataType, type PropertyValue } from "../types/value.js";
-import { DecodeError, Reader, Writer } from "./primitives.js";
+import { DecodeError, EncodeError, Reader, Writer } from "./primitives.js";
 import { decodeOp, encodeOp, type OpDictionaryIndices, type OpDictionaryLookups } from "./op.js";
 
 // Magic bytes
@@ -12,6 +12,15 @@ const MAGIC_COMPRESSED = new TextEncoder().encode("GRC2Z");
 // Current version
 const VERSION = 0;
 
+// Security limits (match Rust codec limits)
+const MAX_STRING_LEN = 16 * 1024 * 1024;
+const MAX_AUTHORS = 1_000;
+const MAX_DICT_SIZE = 1_000_000;
+const MAX_OPS_PER_EDIT = 1_000_000;
+const MAX_VALUES_PER_ENTITY = 10_000;
+const MAX_POSITION_LEN = 64;
+const POSITION_RE = /^[0-9A-Za-z]+$/;
+
 /**
  * Encoding options.
  */
@@ -20,11 +29,227 @@ export interface EncodeOptions {
   canonical?: boolean;
 }
 
+function assertId(value: unknown, context: string): asserts value is Id {
+  if (!(value instanceof Uint8Array) || value.length !== 16) {
+    throw new EncodeError("E005", `invalid id for ${context}`);
+  }
+}
+
+function validatePosition(pos: string, context: string): void {
+  if (pos.length === 0) {
+    throw new EncodeError("E005", `${context} position cannot be empty`);
+  }
+  if (pos.length > MAX_POSITION_LEN) {
+    throw new EncodeError("E005", `${context} position length ${pos.length} exceeds maximum ${MAX_POSITION_LEN}`);
+  }
+  if (!POSITION_RE.test(pos)) {
+    throw new EncodeError("E005", `${context} position contains invalid characters`);
+  }
+}
+
+function validateContext(ctx: Context, context: string): void {
+  assertId(ctx.rootId, `${context}.rootId`);
+  if (!Array.isArray(ctx.edges)) {
+    throw new EncodeError("E005", `${context}.edges must be an array`);
+  }
+  if (ctx.edges.length > MAX_DICT_SIZE) {
+    throw new EncodeError("E005", `${context}.edges length ${ctx.edges.length} exceeds maximum ${MAX_DICT_SIZE}`);
+  }
+  for (let i = 0; i < ctx.edges.length; i++) {
+    const edge = ctx.edges[i];
+    assertId(edge.typeId, `${context}.edges[${i}].typeId`);
+    assertId(edge.toEntityId, `${context}.edges[${i}].toEntityId`);
+  }
+}
+
+function validateUnsetLanguage(lang: UnsetLanguage, context: string): void {
+  switch (lang.type) {
+    case "all":
+    case "english":
+      return;
+    case "specific":
+      assertId(lang.language, `${context}.language`);
+      return;
+  }
+}
+
+function validatePropertyValue(value: PropertyValue, context: string): void {
+  assertId(value.property, `${context}.property`);
+  if (value.value.type === "text" && value.value.language !== undefined) {
+    assertId(value.value.language, `${context}.value.language`);
+  }
+  if (
+    (value.value.type === "int64" || value.value.type === "float64" || value.value.type === "decimal") &&
+    value.value.unit !== undefined
+  ) {
+    assertId(value.value.unit, `${context}.value.unit`);
+  }
+}
+
+function validateOp(op: Op, index: number): void {
+  const context = `op[${index}]`;
+  switch (op.type) {
+    case "createEntity":
+      assertId(op.id, `${context}.id`);
+      if (!Array.isArray(op.values)) {
+        throw new EncodeError("E005", `${context}.values must be an array`);
+      }
+      if (op.values.length > MAX_VALUES_PER_ENTITY) {
+        throw new EncodeError("E005", `${context}.values length ${op.values.length} exceeds maximum ${MAX_VALUES_PER_ENTITY}`);
+      }
+      for (let i = 0; i < op.values.length; i++) {
+        validatePropertyValue(op.values[i], `${context}.values[${i}]`);
+      }
+      if (op.context !== undefined) {
+        validateContext(op.context, `${context}.context`);
+      }
+      return;
+    case "updateEntity":
+      assertId(op.id, `${context}.id`);
+      if (!Array.isArray(op.set)) {
+        throw new EncodeError("E005", `${context}.set must be an array`);
+      }
+      if (!Array.isArray(op.unset)) {
+        throw new EncodeError("E005", `${context}.unset must be an array`);
+      }
+      if (op.set.length > MAX_VALUES_PER_ENTITY) {
+        throw new EncodeError("E005", `${context}.set length ${op.set.length} exceeds maximum ${MAX_VALUES_PER_ENTITY}`);
+      }
+      if (op.unset.length > MAX_VALUES_PER_ENTITY) {
+        throw new EncodeError("E005", `${context}.unset length ${op.unset.length} exceeds maximum ${MAX_VALUES_PER_ENTITY}`);
+      }
+      for (let i = 0; i < op.set.length; i++) {
+        validatePropertyValue(op.set[i], `${context}.set[${i}]`);
+      }
+      for (let i = 0; i < op.unset.length; i++) {
+        const u = op.unset[i];
+        assertId(u.property, `${context}.unset[${i}].property`);
+        validateUnsetLanguage(u.language, `${context}.unset[${i}].language`);
+      }
+      if (op.context !== undefined) {
+        validateContext(op.context, `${context}.context`);
+      }
+      return;
+    case "deleteEntity":
+    case "restoreEntity":
+      assertId(op.id, `${context}.id`);
+      if (op.context !== undefined) {
+        validateContext(op.context, `${context}.context`);
+      }
+      return;
+    case "createRelation":
+      assertId(op.id, `${context}.id`);
+      assertId(op.relationType, `${context}.relationType`);
+      assertId(op.from, `${context}.from`);
+      assertId(op.to, `${context}.to`);
+      if (op.fromIsValueRef !== undefined && typeof op.fromIsValueRef !== "boolean") {
+        throw new EncodeError("E005", `${context}.fromIsValueRef must be a boolean`);
+      }
+      if (op.toIsValueRef !== undefined && typeof op.toIsValueRef !== "boolean") {
+        throw new EncodeError("E005", `${context}.toIsValueRef must be a boolean`);
+      }
+      if (op.fromSpace !== undefined) assertId(op.fromSpace, `${context}.fromSpace`);
+      if (op.fromVersion !== undefined) assertId(op.fromVersion, `${context}.fromVersion`);
+      if (op.toSpace !== undefined) assertId(op.toSpace, `${context}.toSpace`);
+      if (op.toVersion !== undefined) assertId(op.toVersion, `${context}.toVersion`);
+      if (op.entity !== undefined) assertId(op.entity, `${context}.entity`);
+      if (op.position !== undefined) validatePosition(op.position, context);
+      if (op.context !== undefined) {
+        validateContext(op.context, `${context}.context`);
+      }
+      return;
+    case "updateRelation":
+      assertId(op.id, `${context}.id`);
+      if (op.fromSpace !== undefined) assertId(op.fromSpace, `${context}.fromSpace`);
+      if (op.fromVersion !== undefined) assertId(op.fromVersion, `${context}.fromVersion`);
+      if (op.toSpace !== undefined) assertId(op.toSpace, `${context}.toSpace`);
+      if (op.toVersion !== undefined) assertId(op.toVersion, `${context}.toVersion`);
+      if (op.position !== undefined) validatePosition(op.position, context);
+      if (op.unset !== undefined) {
+        const allowed = new Set(["fromSpace", "fromVersion", "toSpace", "toVersion", "position"]);
+        for (const field of op.unset) {
+          if (!allowed.has(field)) {
+            throw new EncodeError("E005", `${context}.unset contains invalid field: ${field}`);
+          }
+        }
+      }
+      if (op.context !== undefined) {
+        validateContext(op.context, `${context}.context`);
+      }
+      return;
+    case "deleteRelation":
+    case "restoreRelation":
+      assertId(op.id, `${context}.id`);
+      if (op.context !== undefined) {
+        validateContext(op.context, `${context}.context`);
+      }
+      return;
+    case "createValueRef": {
+      const opAny = op as unknown as { context?: unknown };
+      if (opAny.context !== undefined) {
+        throw new EncodeError("E005", `${context}.context is not allowed for createValueRef`);
+      }
+      assertId(op.id, `${context}.id`);
+      assertId(op.entity, `${context}.entity`);
+      assertId(op.property, `${context}.property`);
+      if (op.language !== undefined) assertId(op.language, `${context}.language`);
+      if (op.space !== undefined) assertId(op.space, `${context}.space`);
+      return;
+    }
+    default: {
+      const typeValue = (op as { type?: string }).type ?? "unknown";
+      throw new EncodeError("E005", `${context} has invalid op type: ${typeValue}`);
+    }
+  }
+}
+
+function validateEdit(edit: Edit, canonical: boolean): void {
+  assertId(edit.id, "edit.id");
+  if (typeof edit.name !== "string") {
+    throw new EncodeError("E005", "edit.name must be a string");
+  }
+  const nameBytes = new TextEncoder().encode(edit.name).length;
+  if (nameBytes > MAX_STRING_LEN) {
+    throw new EncodeError("E005", `edit.name length ${nameBytes} exceeds maximum ${MAX_STRING_LEN}`);
+  }
+  if (!Array.isArray(edit.authors)) {
+    throw new EncodeError("E005", "edit.authors must be an array");
+  }
+  if (edit.authors.length > MAX_AUTHORS) {
+    throw new EncodeError("E005", `edit.authors length ${edit.authors.length} exceeds maximum ${MAX_AUTHORS}`);
+  }
+  for (let i = 0; i < edit.authors.length; i++) {
+    assertId(edit.authors[i], `edit.authors[${i}]`);
+  }
+  if (canonical) {
+    const sorted = [...edit.authors].sort(compareIds);
+    for (let i = 1; i < sorted.length; i++) {
+      if (compareIds(sorted[i - 1], sorted[i]) === 0) {
+        throw new EncodeError("E005", "edit.authors contains duplicate IDs in canonical mode");
+      }
+    }
+  }
+  if (typeof edit.createdAt !== "bigint") {
+    throw new EncodeError("E005", "edit.createdAt must be a bigint");
+  }
+  if (!Array.isArray(edit.ops)) {
+    throw new EncodeError("E005", "edit.ops must be an array");
+  }
+  if (edit.ops.length > MAX_OPS_PER_EDIT) {
+    throw new EncodeError("E005", `edit.ops length ${edit.ops.length} exceeds maximum ${MAX_OPS_PER_EDIT}`);
+  }
+  for (let i = 0; i < edit.ops.length; i++) {
+    validateOp(edit.ops[i], i);
+  }
+}
+
 /**
  * Encodes an Edit to binary format.
  */
 export function encodeEdit(edit: Edit, options?: EncodeOptions): Uint8Array {
   const canonical = options?.canonical ?? false;
+
+  validateEdit(edit, canonical);
 
   // Build dictionaries by scanning all ops (contexts are collected from ops)
   let dicts = buildDictionaries(edit.ops);
@@ -44,6 +269,41 @@ export function encodeEdit(edit: Edit, options?: EncodeOptions): Uint8Array {
   }
   const opsBytes = opsWriter.finish();
   const contexts = getContexts();
+
+  if (dicts.properties.size > MAX_DICT_SIZE) {
+    throw new EncodeError("E005", `properties dictionary size ${dicts.properties.size} exceeds maximum ${MAX_DICT_SIZE}`);
+  }
+  if (dicts.relationTypes.size > MAX_DICT_SIZE) {
+    throw new EncodeError("E005", `relationTypes dictionary size ${dicts.relationTypes.size} exceeds maximum ${MAX_DICT_SIZE}`);
+  }
+  if (dicts.languages.size > MAX_DICT_SIZE) {
+    throw new EncodeError("E005", `languages dictionary size ${dicts.languages.size} exceeds maximum ${MAX_DICT_SIZE}`);
+  }
+  if (dicts.units.size > MAX_DICT_SIZE) {
+    throw new EncodeError("E005", `units dictionary size ${dicts.units.size} exceeds maximum ${MAX_DICT_SIZE}`);
+  }
+  if (dicts.objects.size > MAX_DICT_SIZE) {
+    throw new EncodeError("E005", `objects dictionary size ${dicts.objects.size} exceeds maximum ${MAX_DICT_SIZE}`);
+  }
+  if (dicts.contextIds.size > MAX_DICT_SIZE) {
+    throw new EncodeError("E005", `contextIds dictionary size ${dicts.contextIds.size} exceeds maximum ${MAX_DICT_SIZE}`);
+  }
+  if (contexts.length > MAX_DICT_SIZE) {
+    throw new EncodeError("E005", `contexts length ${contexts.length} exceeds maximum ${MAX_DICT_SIZE}`);
+  }
+  for (let i = 0; i < contexts.length; i++) {
+    validateContext(contexts[i], `contexts[${i}]`);
+    // Ensure indices are resolvable (dictionary requirement).
+    try {
+      indices.getContextIdIndex(contexts[i].rootId);
+      for (const edge of contexts[i].edges) {
+        indices.getRelationTypeIndex(edge.typeId);
+        indices.getContextIdIndex(edge.toEntityId);
+      }
+    } catch (err) {
+      throw new EncodeError("E005", `context dictionary validation failed: ${(err as Error).message}`);
+    }
+  }
 
   // Write to buffer
   const writer = new Writer(1024);
@@ -255,6 +515,10 @@ function buildDictionaries(ops: Op[]): DictionaryBuilder {
       case "restoreRelation":
         addObject(op.id);
         break;
+      default: {
+        const typeValue = (op as { type?: string }).type ?? "unknown";
+        throw new EncodeError("E005", `invalid op type: ${typeValue}`);
+      }
     }
   }
 

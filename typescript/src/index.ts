@@ -36,6 +36,7 @@ export {
   Writer,
   Reader,
   DecodeError,
+  EncodeError,
   // Compression (lazy-loaded WASM)
   preloadCompression,
   isCompressionReady,

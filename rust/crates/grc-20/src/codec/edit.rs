@@ -522,6 +522,111 @@ impl EncodeOptions {
     }
 }
 
+fn validate_context_limits(context: &Context) -> Result<(), EncodeError> {
+    if context.edges.len() > MAX_DICT_SIZE {
+        return Err(EncodeError::LengthExceedsLimit {
+            field: "context_edges",
+            len: context.edges.len(),
+            max: MAX_DICT_SIZE,
+        });
+    }
+    Ok(())
+}
+
+fn validate_edit_inputs(edit: &Edit) -> Result<(), EncodeError> {
+    let name_len = edit.name.as_bytes().len();
+    if name_len > MAX_STRING_LEN {
+        return Err(EncodeError::LengthExceedsLimit {
+            field: "name",
+            len: name_len,
+            max: MAX_STRING_LEN,
+        });
+    }
+    if edit.authors.len() > MAX_AUTHORS {
+        return Err(EncodeError::LengthExceedsLimit {
+            field: "authors",
+            len: edit.authors.len(),
+            max: MAX_AUTHORS,
+        });
+    }
+    if edit.ops.len() > MAX_OPS_PER_EDIT {
+        return Err(EncodeError::LengthExceedsLimit {
+            field: "ops",
+            len: edit.ops.len(),
+            max: MAX_OPS_PER_EDIT,
+        });
+    }
+
+    for op in &edit.ops {
+        match op {
+            Op::CreateEntity(ce) => {
+                if ce.values.len() > crate::limits::MAX_VALUES_PER_ENTITY {
+                    return Err(EncodeError::LengthExceedsLimit {
+                        field: "values",
+                        len: ce.values.len(),
+                        max: crate::limits::MAX_VALUES_PER_ENTITY,
+                    });
+                }
+                if let Some(ctx) = &ce.context {
+                    validate_context_limits(ctx)?;
+                }
+            }
+            Op::UpdateEntity(ue) => {
+                if ue.set_properties.len() > crate::limits::MAX_VALUES_PER_ENTITY {
+                    return Err(EncodeError::LengthExceedsLimit {
+                        field: "set_properties",
+                        len: ue.set_properties.len(),
+                        max: crate::limits::MAX_VALUES_PER_ENTITY,
+                    });
+                }
+                if ue.unset_values.len() > crate::limits::MAX_VALUES_PER_ENTITY {
+                    return Err(EncodeError::LengthExceedsLimit {
+                        field: "unset_values",
+                        len: ue.unset_values.len(),
+                        max: crate::limits::MAX_VALUES_PER_ENTITY,
+                    });
+                }
+                if let Some(ctx) = &ue.context {
+                    validate_context_limits(ctx)?;
+                }
+            }
+            Op::DeleteEntity(de) => {
+                if let Some(ctx) = &de.context {
+                    validate_context_limits(ctx)?;
+                }
+            }
+            Op::RestoreEntity(re) => {
+                if let Some(ctx) = &re.context {
+                    validate_context_limits(ctx)?;
+                }
+            }
+            Op::CreateRelation(cr) => {
+                if let Some(ctx) = &cr.context {
+                    validate_context_limits(ctx)?;
+                }
+            }
+            Op::UpdateRelation(ur) => {
+                if let Some(ctx) = &ur.context {
+                    validate_context_limits(ctx)?;
+                }
+            }
+            Op::DeleteRelation(dr) => {
+                if let Some(ctx) = &dr.context {
+                    validate_context_limits(ctx)?;
+                }
+            }
+            Op::RestoreRelation(rr) => {
+                if let Some(ctx) = &rr.context {
+                    validate_context_limits(ctx)?;
+                }
+            }
+            Op::CreateValueRef(_) => {}
+        }
+    }
+
+    Ok(())
+}
+
 /// Encodes an Edit to binary format (uncompressed).
 ///
 /// Uses single-pass encoding: ops are encoded to a buffer while building
@@ -532,6 +637,7 @@ pub fn encode_edit(edit: &Edit) -> Result<Vec<u8>, EncodeError> {
 
 /// Encodes an Edit to binary format with the given options.
 pub fn encode_edit_with_options(edit: &Edit, options: EncodeOptions) -> Result<Vec<u8>, EncodeError> {
+    validate_edit_inputs(edit)?;
     if options.canonical {
         encode_edit_canonical(edit)
     } else {
@@ -553,6 +659,7 @@ fn encode_edit_fast(edit: &Edit) -> Result<Vec<u8>, EncodeError> {
     for op in &edit.ops {
         encode_op(&mut ops_writer, op, &mut dict_builder, &property_types)?;
     }
+    dict_builder.validate_limits()?;
 
     // Now assemble final output: header + dictionaries + contexts + ops
     let ops_bytes = ops_writer.into_bytes();
@@ -603,6 +710,7 @@ fn encode_edit_canonical(edit: &Edit) -> Result<Vec<u8>, EncodeError> {
     for op in &edit.ops {
         encode_op(&mut temp_writer, op, &mut dict_builder, &property_types)?;
     }
+    dict_builder.validate_limits()?;
 
     // Sort dictionaries and get sorted builder
     let sorted_builder = dict_builder.into_sorted();
