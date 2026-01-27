@@ -1,4 +1,4 @@
-import { compareIds, type Id } from "../types/id.js";
+import { compareIds, idsEqual, type Id } from "../types/id.js";
 import type { Context, ContextEdge, Edit, WireDictionaries } from "../types/edit.js";
 import type { Op, UnsetLanguage } from "../types/op.js";
 import { DataType, valueDataType, type PropertyValue } from "../types/value.js";
@@ -182,6 +182,9 @@ function validateOp(op: Op, index: number): void {
       assertId(op.relationType, `${context}.relationType`);
       assertId(op.from, `${context}.from`);
       assertId(op.to, `${context}.to`);
+      if (op.entity !== undefined && idsEqual(op.entity, op.id)) {
+        throw new EncodeError("E005", `${context}.entity must differ from relation id`);
+      }
       if (op.fromIsValueRef !== undefined && typeof op.fromIsValueRef !== "boolean") {
         throw new EncodeError("E005", `${context}.fromIsValueRef must be a boolean`);
       }
@@ -207,10 +210,15 @@ function validateOp(op: Op, index: number): void {
       if (op.position !== undefined) validatePosition(op.position, context);
       if (op.unset !== undefined) {
         const allowed = new Set(["fromSpace", "fromVersion", "toSpace", "toVersion", "position"]);
+        const seen = new Set<string>();
         for (const field of op.unset) {
           if (!allowed.has(field)) {
             throw new EncodeError("E005", `${context}.unset contains invalid field: ${field}`);
           }
+          if (seen.has(field)) {
+            throw new EncodeError("E005", `${context}.unset contains duplicate field: ${field}`);
+          }
+          seen.add(field);
           if (
             (field === "fromSpace" && op.fromSpace !== undefined) ||
             (field === "fromVersion" && op.fromVersion !== undefined) ||
@@ -296,10 +304,16 @@ function validateEdit(edit: Edit, canonical: boolean): void {
     throw new EncodeError("E005", `edit.ops length ${edit.ops.length} exceeds maximum ${MAX_OPS_PER_EDIT}`);
   }
   const propertyTypes = new Map<string, DataType>();
+  const deletedEntities = new Set<string>();
+  const deletedRelations = new Set<string>();
   for (let i = 0; i < edit.ops.length; i++) {
     const op = edit.ops[i];
     validateOp(op, i);
     if (op.type === "createEntity") {
+      const idKeyValue = idKey(op.id);
+      if (deletedEntities.has(idKeyValue)) {
+        throw new EncodeError("E005", "delete-then-create entity in same edit");
+      }
       for (const pv of op.values) {
         const key = idKey(pv.property);
         const dt = valueDataType(pv.value);
@@ -329,6 +343,26 @@ function validateEdit(edit: Edit, canonical: boolean): void {
           if (existing === undefined) {
             propertyTypes.set(key, DataType.Text);
           }
+        }
+      }
+    } else if (op.type === "deleteEntity") {
+      deletedEntities.add(idKey(op.id));
+    } else if (op.type === "createRelation") {
+      const idKeyValue = idKey(op.id);
+      if (deletedRelations.has(idKeyValue)) {
+        throw new EncodeError("E005", "delete-then-create relation in same edit");
+      }
+    } else if (op.type === "deleteRelation") {
+      deletedRelations.add(idKey(op.id));
+    } else if (op.type === "createValueRef") {
+      if (op.language !== undefined) {
+        const key = idKey(op.property);
+        const existing = propertyTypes.get(key);
+        if (existing !== undefined && existing !== DataType.Text) {
+          throw new EncodeError("E005", `createValueRef language requires TEXT property for ${key}`);
+        }
+        if (existing === undefined) {
+          propertyTypes.set(key, DataType.Text);
         }
       }
     }
@@ -689,8 +723,12 @@ function buildDictionaries(ops: Op[]): DictionaryBuilder {
       case "createRelation":
         // For unique mode, compute the derived ID and add to objects if referenced later
         addRelationType(op.relationType);
-        addObject(op.from);
-        addObject(op.to);
+        if (!op.fromIsValueRef) {
+          addObject(op.from);
+        }
+        if (!op.toIsValueRef) {
+          addObject(op.to);
+        }
         // Many mode ID is inline
         // Entity is inline if present
         break;
@@ -699,6 +737,13 @@ function buildDictionaries(ops: Op[]): DictionaryBuilder {
       case "deleteRelation":
       case "restoreRelation":
         addObject(op.id);
+        break;
+      case "createValueRef":
+        addObject(op.entity);
+        addProperty(op.property, op.language ? DataType.Text : DataType.Bool);
+        if (op.language) {
+          addLanguage(op.language);
+        }
         break;
       default: {
         const typeValue = (op as { type?: string }).type ?? "unknown";
