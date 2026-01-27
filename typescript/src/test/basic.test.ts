@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import type { Edit } from "../index.js";
+import type { Edit, Id } from "../index.js";
 import {
   EditBuilder,
   createEdit,
@@ -36,7 +36,7 @@ import {
   Reader,
 } from "../index.js";
 
-function readObjectIds(encoded: Uint8Array): Uint8Array[] {
+function readObjectIds(encoded: Uint8Array): Id[] {
   const reader = new Reader(encoded);
   reader.readBytes(4);
   reader.readByte();
