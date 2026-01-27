@@ -1,6 +1,6 @@
 {
   "name": "@geoprotocol/grc-20",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "GRC-20 TypeScript library for binary property graph encoding/decoding",
   "private": false,
   "publishConfig": {
