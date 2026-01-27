@@ -670,6 +670,85 @@ describe("Codec", () => {
     expect(decoded.ops.length).toBe(edit.ops.length);
   });
 
+  it("throws when updateEntity set and unset overlap", () => {
+    const editId = randomId();
+    const entityId = randomId();
+    const propId = properties.name();
+
+    const edit: Edit = {
+      id: editId,
+      name: "Test Edit",
+      authors: [],
+      createdAt: 0n,
+      ops: [
+        {
+          type: "updateEntity",
+          id: entityId,
+          set: [
+            {
+              property: propId,
+              value: { type: "text", value: "A", language: undefined },
+            },
+          ],
+          unset: [{ property: propId, language: { type: "english" } }],
+        },
+      ],
+    };
+
+    expect(() => encodeEdit(edit)).toThrow("conflicts with set");
+  });
+
+  it("throws when updateRelation set and unset overlap", () => {
+    const editId = randomId();
+    const relationId = randomId();
+    const spaceId = randomId();
+
+    const edit: Edit = {
+      id: editId,
+      name: "Test Edit",
+      authors: [],
+      createdAt: 0n,
+      ops: [
+        {
+          type: "updateRelation",
+          id: relationId,
+          fromSpace: spaceId,
+          unset: ["fromSpace"],
+        },
+      ],
+    };
+
+    expect(() => encodeEdit(edit)).toThrow("unset contains field also set");
+  });
+
+  it("throws when unset language is used for non-text property", () => {
+    const editId = randomId();
+    const entityId = randomId();
+    const propId = properties.population();
+
+    const edit: Edit = {
+      id: editId,
+      name: "Test Edit",
+      authors: [],
+      createdAt: 0n,
+      ops: [
+        {
+          type: "updateEntity",
+          id: entityId,
+          set: [
+            {
+              property: propId,
+              value: { type: "int64", value: 1n, unit: undefined },
+            },
+          ],
+          unset: [{ property: propId, language: { type: "english" } }],
+        },
+      ],
+    };
+
+    expect(() => encodeEdit(edit)).toThrow("unset language requires TEXT");
+  });
+
   it("encodes and decodes all value types", () => {
     const editId = randomId();
     const entityId = randomId();

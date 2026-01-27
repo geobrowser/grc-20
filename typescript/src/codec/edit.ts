@@ -86,6 +86,24 @@ function validatePropertyValue(value: PropertyValue, context: string): void {
   }
 }
 
+function languageKeyForSetValue(value: PropertyValue): string {
+  if (value.value.type === "text") {
+    return value.value.language ? idKey(value.value.language) : "english";
+  }
+  return "non-text";
+}
+
+function languageKeyForUnset(lang: UnsetLanguage): string {
+  switch (lang.type) {
+    case "all":
+      return "all";
+    case "english":
+      return "english";
+    case "specific":
+      return idKey(lang.language);
+  }
+}
+
 function validateOp(op: Op, index: number): void {
   const context = `op[${index}]`;
   switch (op.type) {
@@ -121,10 +139,32 @@ function validateOp(op: Op, index: number): void {
       for (let i = 0; i < op.set.length; i++) {
         validatePropertyValue(op.set[i], `${context}.set[${i}]`);
       }
+      const setKeys = new Map<string, Set<string>>();
+      for (const value of op.set) {
+        const propKey = idKey(value.property);
+        const langKey = languageKeyForSetValue(value);
+        let langs = setKeys.get(propKey);
+        if (!langs) {
+          langs = new Set();
+          setKeys.set(propKey, langs);
+        }
+        langs.add(langKey);
+      }
       for (let i = 0; i < op.unset.length; i++) {
         const u = op.unset[i];
         assertId(u.property, `${context}.unset[${i}].property`);
         validateUnsetLanguage(u.language, `${context}.unset[${i}].language`);
+        const propKey = idKey(u.property);
+        const langKey = languageKeyForUnset(u.language);
+        const setLangs = setKeys.get(propKey);
+        if (setLangs) {
+          if (langKey === "all") {
+            throw new EncodeError("E005", `${context}.unset[${i}] conflicts with set for property`);
+          }
+          if (setLangs.has(langKey)) {
+            throw new EncodeError("E005", `${context}.unset[${i}] conflicts with set for property/language`);
+          }
+        }
       }
       if (op.context !== undefined) {
         validateContext(op.context, `${context}.context`);
@@ -171,6 +211,15 @@ function validateOp(op: Op, index: number): void {
           if (!allowed.has(field)) {
             throw new EncodeError("E005", `${context}.unset contains invalid field: ${field}`);
           }
+          if (
+            (field === "fromSpace" && op.fromSpace !== undefined) ||
+            (field === "fromVersion" && op.fromVersion !== undefined) ||
+            (field === "toSpace" && op.toSpace !== undefined) ||
+            (field === "toVersion" && op.toVersion !== undefined) ||
+            (field === "position" && op.position !== undefined)
+          ) {
+            throw new EncodeError("E005", `${context}.unset contains field also set in op`);
+          }
         }
       }
       if (op.context !== undefined) {
@@ -203,6 +252,14 @@ function validateOp(op: Op, index: number): void {
   }
 }
 
+/**
+ * Encode-time structural validation aligned with spec.md:
+ * - Section 4.3: dictionary membership, size limits, ID shape
+ * - Section 4.4: canonical rules (sorted lists, no duplicates)
+ * - Section 4.5 / 6.3: context structure and ContextRef requirements
+ * - Section 6.4: op type whitelist and context_ref support rules
+ * - Section 3.2 / 3.6: update set/unset overlap and TEXT-only language slots
+ */
 function validateEdit(edit: Edit, canonical: boolean): void {
   assertId(edit.id, "edit.id");
   if (typeof edit.name !== "string") {
@@ -238,8 +295,88 @@ function validateEdit(edit: Edit, canonical: boolean): void {
   if (edit.ops.length > MAX_OPS_PER_EDIT) {
     throw new EncodeError("E005", `edit.ops length ${edit.ops.length} exceeds maximum ${MAX_OPS_PER_EDIT}`);
   }
+  const propertyTypes = new Map<string, DataType>();
   for (let i = 0; i < edit.ops.length; i++) {
-    validateOp(edit.ops[i], i);
+    const op = edit.ops[i];
+    validateOp(op, i);
+    if (op.type === "createEntity") {
+      for (const pv of op.values) {
+        const key = idKey(pv.property);
+        const dt = valueDataType(pv.value);
+        const existing = propertyTypes.get(key);
+        if (existing !== undefined && existing !== dt) {
+          throw new EncodeError("E005", `property type mismatch for ${key}`);
+        }
+        propertyTypes.set(key, dt);
+      }
+    } else if (op.type === "updateEntity") {
+      for (const pv of op.set) {
+        const key = idKey(pv.property);
+        const dt = valueDataType(pv.value);
+        const existing = propertyTypes.get(key);
+        if (existing !== undefined && existing !== dt) {
+          throw new EncodeError("E005", `property type mismatch for ${key}`);
+        }
+        propertyTypes.set(key, dt);
+      }
+      for (const u of op.unset) {
+        if (u.language.type !== "all") {
+          const key = idKey(u.property);
+          const existing = propertyTypes.get(key);
+          if (existing !== undefined && existing !== DataType.Text) {
+            throw new EncodeError("E005", `unset language requires TEXT property for ${key}`);
+          }
+          if (existing === undefined) {
+            propertyTypes.set(key, DataType.Text);
+          }
+        }
+      }
+    }
+  }
+
+  if (canonical) {
+    const makeSetKey = (value: PropertyValue): string =>
+      `${idKey(value.property)}|${languageKeyForSetValue(value)}`;
+    const makeUnsetKey = (unset: UnsetLanguage, property: Id): string =>
+      `${idKey(property)}|${languageKeyForUnset(unset)}`;
+
+    for (const op of edit.ops) {
+      if (op.type === "createEntity") {
+        const seen = new Set<string>();
+        for (const pv of op.values) {
+          const key = makeSetKey(pv);
+          if (seen.has(key)) {
+            throw new EncodeError("E005", "duplicate (property, language) in createEntity.values (canonical)");
+          }
+          seen.add(key);
+        }
+      } else if (op.type === "updateEntity") {
+        const seenSet = new Set<string>();
+        for (const pv of op.set) {
+          const key = makeSetKey(pv);
+          if (seenSet.has(key)) {
+            throw new EncodeError("E005", "duplicate (property, language) in updateEntity.set (canonical)");
+          }
+          seenSet.add(key);
+        }
+        const seenUnset = new Set<string>();
+        for (const u of op.unset) {
+          const key = makeUnsetKey(u.language, u.property);
+          if (seenUnset.has(key)) {
+            throw new EncodeError("E005", "duplicate (property, language) in updateEntity.unset (canonical)");
+          }
+          seenUnset.add(key);
+        }
+      } else if (op.type === "updateRelation" && op.unset) {
+        const seen = new Set<string>();
+        for (const field of op.unset) {
+          if (seen.has(field)) {
+            throw new EncodeError("E005", "duplicate unset field in updateRelation (canonical)");
+          }
+          seen.add(field);
+        }
+      }
+    }
   }
 }
 
@@ -259,12 +396,60 @@ export function encodeEdit(edit: Edit, options?: EncodeOptions): Uint8Array {
     dicts = sortDictionaries(dicts);
   }
 
+  const canonicalizeOps = (ops: Op[]): Op[] => {
+    const sortedOps: Op[] = [];
+    for (const op of ops) {
+      if (op.type === "createEntity") {
+        const values = [...op.values].sort((a, b) => {
+          const propCmp = compareIds(a.property, b.property);
+          if (propCmp !== 0) return propCmp;
+          const aLang = a.value.type === "text" ? a.value.language : undefined;
+          const bLang = b.value.type === "text" ? b.value.language : undefined;
+          if (aLang === undefined && bLang === undefined) return 0;
+          if (aLang === undefined) return -1;
+          if (bLang === undefined) return 1;
+          return compareIds(aLang, bLang);
+        });
+        sortedOps.push({ ...op, values });
+      } else if (op.type === "updateEntity") {
+        const set = [...op.set].sort((a, b) => {
+          const propCmp = compareIds(a.property, b.property);
+          if (propCmp !== 0) return propCmp;
+          const aLang = a.value.type === "text" ? a.value.language : undefined;
+          const bLang = b.value.type === "text" ? b.value.language : undefined;
+          if (aLang === undefined && bLang === undefined) return 0;
+          if (aLang === undefined) return -1;
+          if (bLang === undefined) return 1;
+          return compareIds(aLang, bLang);
+        });
+        const unset = [...op.unset].sort((a, b) => {
+          const propCmp = compareIds(a.property, b.property);
+          if (propCmp !== 0) return propCmp;
+          const aKey = languageKeyForUnset(a.language);
+          const bKey = languageKeyForUnset(b.language);
+          if (aKey === bKey) return 0;
+          if (aKey === "all") return 1;
+          if (bKey === "all") return -1;
+          if (aKey === "english") return bKey === "english" ? 0 : -1;
+          if (bKey === "english") return 1;
+          return aKey.localeCompare(bKey);
+        });
+        sortedOps.push({ ...op, set, unset });
+      } else {
+        sortedOps.push(op);
+      }
+    }
+    return sortedOps;
+  };
+
+  const opsToEncode = canonical ? canonicalizeOps(edit.ops) : edit.ops;
+
   // Create dictionary indices (with context collection support)
   const { indices, getContexts } = createDictionaryIndices(dicts);
 
   // First pass: encode ops to collect contexts
-  const opsWriter = new Writer(edit.ops.length * 50);
-  for (const op of edit.ops) {
+  const opsWriter = new Writer(opsToEncode.length * 50);
+  for (const op of opsToEncode) {
     encodeOp(opsWriter, op, indices);
   }
   const opsBytes = opsWriter.finish();
@@ -331,7 +516,7 @@ export function encodeEdit(edit: Edit, options?: EncodeOptions): Uint8Array {
   writeContexts(writer, contexts, indices);
 
   // Operations (already encoded)
-  writer.writeVarintNumber(edit.ops.length);
+  writer.writeVarintNumber(opsToEncode.length);
   writer.writeBytes(opsBytes);
 
   return writer.finish();
