@@ -1230,8 +1230,32 @@ describe("Codec", () => {
     for (let i = 0; i < encoded1.length; i++) {
       expect(encoded1[i]).toBe(encoded2[i]);
     }
+    });
   });
-});
+
+  it("throws when time or datetime is missing a timezone offset", () => {
+    const editId = randomId();
+    const entityId = randomId();
+
+    const edit: Edit = {
+      id: editId,
+      name: "Test Edit",
+      authors: [],
+      createdAt: 0n,
+      ops: [
+        {
+          type: "createEntity",
+          id: entityId,
+          values: [
+            { property: properties.name(), value: { type: "time", value: "14:30:00" } },
+            { property: properties.description(), value: { type: "datetime", value: "2024-03-15T14:30:00" } },
+          ],
+        },
+      ],
+    };
+
+    expect(() => encodeEdit(edit)).toThrow("Invalid RFC 3339 time");
+  });
 
 describe("Compression", () => {
   it("isCompressed detects GRC2Z magic", () => {

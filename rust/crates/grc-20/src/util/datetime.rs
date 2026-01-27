@@ -342,7 +342,11 @@ pub fn parse_time_rfc3339(time_str: &str) -> Result<(i64, i16), DateTimeParseErr
 
     let offset_min = match offset_str {
         Some(s) => parse_timezone_offset(s)?,
-        None => 0,
+        None => {
+            return Err(DateTimeParseError {
+                message: format!("Timezone offset required in time: {}", time_str),
+            });
+        }
     };
 
     Ok((time_micros, offset_min))
@@ -481,7 +485,11 @@ pub fn parse_datetime_rfc3339(datetime_str: &str) -> Result<(i64, i16), DateTime
 
     let offset_min = match offset_str {
         Some(s) => parse_timezone_offset(s)?,
-        None => 0,
+        None => {
+            return Err(DateTimeParseError {
+                message: format!("Timezone offset required in datetime: {}", datetime_str),
+            });
+        }
     };
 
     let microseconds = parse_fractional_seconds(fractional);
@@ -593,10 +601,6 @@ mod tests {
 
     #[test]
     fn test_parse_time_basic() {
-        let (time_micros, offset) = parse_time_rfc3339("00:00:00").unwrap();
-        assert_eq!(time_micros, 0);
-        assert_eq!(offset, 0);
-
         let (time_micros, offset) = parse_time_rfc3339("14:30:00Z").unwrap();
         assert_eq!(time_micros, 52_200_000_000);
         assert_eq!(offset, 0);
@@ -718,10 +722,17 @@ mod tests {
 
     #[test]
     fn test_invalid_times() {
+        assert!(parse_time_rfc3339("00:00:00").is_err()); // missing timezone
         assert!(parse_time_rfc3339("24:00:00").is_err()); // invalid hour
         assert!(parse_time_rfc3339("14:60:00").is_err()); // invalid minute
         assert!(parse_time_rfc3339("14:30:60").is_err()); // invalid second
         assert!(parse_time_rfc3339("not:a:time").is_err());
+    }
+
+    #[test]
+    fn test_invalid_datetimes() {
+        assert!(parse_datetime_rfc3339("2024-03-15T14:30:00").is_err()); // missing timezone
+        assert!(parse_datetime_rfc3339("not-a-datetime").is_err());
     }
 
     #[test]
