@@ -5,7 +5,10 @@
       "Bash(grep:*)",
       "Bash(cargo test:*)",
       "Bash(npm test)",
-      "Bash(cargo build:*)"
+      "Bash(cargo build:*)",
+      "Bash(npm run test:*)",
+      "Bash(xxd:*)",
+      "Bash(printf:*)"
     ]
   }
 }
