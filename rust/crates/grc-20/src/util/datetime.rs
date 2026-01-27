@@ -261,6 +261,9 @@ pub fn format_date_rfc3339(days: i32, offset_min: i16) -> String {
 
 /// Parses an RFC 3339 time string (HH:MM:SS[.ssssss][Z|+HH:MM]) and returns
 /// microseconds since midnight and offset in minutes.
+///
+/// Spec: TIME value definition (spec.md "TIME" section) requires offset_min;
+/// reject inputs without explicit timezone (Z or ±HH:MM).
 pub fn parse_time_rfc3339(time_str: &str) -> Result<(i64, i16), DateTimeParseError> {
     // Minimum length is 8 (HH:MM:SS)
     if time_str.len() < 8 {
@@ -373,6 +376,9 @@ pub fn format_time_rfc3339(time_micros: i64, offset_min: i16) -> String {
 
 /// Parses an RFC 3339 datetime string and returns microseconds since Unix epoch
 /// and offset in minutes.
+///
+/// Spec: DATETIME value definition (spec.md "DATETIME" section) requires offset_min;
+/// reject inputs without explicit timezone (Z or ±HH:MM).
 pub fn parse_datetime_rfc3339(datetime_str: &str) -> Result<(i64, i16), DateTimeParseError> {
     // Minimum length is 19 (YYYY-MM-DDTHH:MM:SS)
     if datetime_str.len() < 19 {

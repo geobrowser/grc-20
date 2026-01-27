@@ -141,6 +141,9 @@ export function formatDateRfc3339(days: number, offsetMin: number = 0): string {
 /**
  * Parses an RFC 3339 time string (HH:MM:SS[.ssssss][Z|+HH:MM]) and returns
  * microseconds since midnight and offset in minutes.
+ *
+ * Spec: TIME value definition (spec.md "TIME" section) requires offset_min;
+ * reject inputs without explicit timezone (Z or ±HH:MM).
  */
 export function parseTimeRfc3339(timeStr: string): { timeMicros: bigint; offsetMin: number } {
   // Match HH:MM:SS[.fractional][timezone]
@@ -215,6 +218,9 @@ export function formatTimeRfc3339(timeMicros: bigint, offsetMin: number = 0): st
 /**
  * Parses an RFC 3339 datetime string and returns microseconds since Unix epoch
  * and offset in minutes.
+ *
+ * Spec: DATETIME value definition (spec.md "DATETIME" section) requires offset_min;
+ * reject inputs without explicit timezone (Z or ±HH:MM).
  */
 export function parseDatetimeRfc3339(datetimeStr: string): { epochMicros: bigint; offsetMin: number } {
   // Match YYYY-MM-DDTHH:MM:SS[.fractional][timezone]
