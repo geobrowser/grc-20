@@ -82,7 +82,7 @@ const decoded = decodeEdit(bytes);
 | `TIME` | Time of day with timezone |
 | `DATETIME` | Timestamp with timezone |
 | `SCHEDULE` | RFC 5545/7953 iCalendar schedule |
-| `POINT` | WGS84 coordinates (lat, lon) |
+| `POINT` | WGS84 coordinates (lat, lon, optional alt) |
 | `RECT` | Axis-aligned bounding box |
 | `EMBEDDING` | Dense vectors for semantic search |
 
