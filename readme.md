@@ -6,7 +6,7 @@ GRC-20 is designed for encoding, decoding, and synchronizing graph data across d
 
 ## Features
 
-- **Property Graph Model** — Entities, relations, and typed properties with 12 data types
+- **Property Graph Model** — Entities, relations, and typed properties with 13 data types
 - **Event Sourced** — All state changes expressed as append-only operations
 - **Binary Optimized** — Dictionary interning and zstd compression for minimal wire size
 - **Deterministic** — Canonical encoding for content addressing and signatures
@@ -56,8 +56,8 @@ import { EditBuilder, encodeEdit, decodeEdit, properties } from '@geoprotocol/gr
 
 // Create an edit
 const edit = new EditBuilder(editId)
-  .name('My Edit')
-  .author(authorId)
+  .setName('My Edit')
+  .addAuthor(authorId)
   .createEntity(entityId, (e) => e.text(properties.name(), 'Hello'))
   .build();
 
@@ -78,11 +78,12 @@ const decoded = decodeEdit(bytes);
 | `DECIMAL` | Arbitrary-precision decimal (with optional unit) |
 | `TEXT` | UTF-8 string (with optional language) |
 | `BYTES` | Opaque byte array |
-| `DATE` | ISO 8601 date (year, month, or day precision) |
-| `TIME` | ISO 8601 time (HH:MM:SS with optional timezone) |
-| `DATETIME` | ISO 8601 date-time with timezone |
-| `SCHEDULE` | Recurring schedule (cron-like) |
-| `POINT` | WGS84 coordinates (lat, lon) |
+| `DATE` | Calendar date with timezone |
+| `TIME` | Time of day with timezone |
+| `DATETIME` | Timestamp with timezone |
+| `SCHEDULE` | RFC 5545/7953 iCalendar schedule |
+| `POINT` | WGS84 coordinates (lat, lon, optional alt) |
+| `RECT` | Axis-aligned bounding box |
 | `EMBEDDING` | Dense vectors for semantic search |
 
 ## Operations
@@ -107,7 +108,7 @@ Value references allow creating referenceable values that can be used as relatio
 
 ```typescript
 // Create a value ref that can be targeted by relations
-.createValueRef(valueRefId, entityId, propId, value)
+.addOp({ type: 'createValueRef', id: valueRefId, entity: entityId, property: propId })
 ```
 
 ### Multi-Language Support
@@ -120,7 +121,7 @@ e.text(nameProp, "Hello", languages.english())
 e.text(nameProp, "Hola", languages.spanish())
 
 // Unset specific language variant
-u.unsetText(nameProp, languages.english())
+u.unsetLanguage(nameProp, languages.english())
 ```
 
 ### Relation Features

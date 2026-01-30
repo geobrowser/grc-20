@@ -126,8 +126,8 @@ const edit = new EditBuilder(editId)
   .updateEntity(entityId, u => u
     .setText(propId, "new value", undefined)
     .setInt64(propId, 100n, undefined)
-    .unsetText(propId, languageId)  // Unset specific language
-    .unsetAll(propId)               // Unset all values for property
+    .unsetLanguage(propId, languageId)  // Unset specific language
+    .unsetAll(propId)                   // Unset all values for property
   )
   .deleteEntity(entityId)
   .restoreEntity(entityId)
@@ -139,10 +139,7 @@ const edit = new EditBuilder(editId)
   )
   .deleteRelation(relationId)
   .restoreRelation(relationId)
-  .createValueRef(valueRefId, entityId, propId, {
-    type: "text",
-    value: "Referenceable value"
-  })
+  .addOp({ type: 'createValueRef', id: valueRefId, entity: entityId, property: propId })
   .build();
 ```
 
@@ -301,9 +298,10 @@ if (!posResult.valid) {
 | `DATE` | `{ type: "date", value: string }` (RFC 3339, e.g. `"2024-01-15Z"`) |
 | `TIME` | `{ type: "time", value: string }` (RFC 3339, e.g. `"14:30:00Z"`) |
 | `DATETIME` | `{ type: "datetime", value: string }` (RFC 3339, e.g. `"2024-01-15T14:30:00Z"`) |
-| `SCHEDULE` | `{ type: "schedule", value: string }` (cron-like) |
-| `POINT` | `{ type: "point", lat: number, lon: number }` |
-| `EMBEDDING` | `{ type: "embedding", subType: EmbeddingSubType.Float32 \| EmbeddingSubType.Int8 \| EmbeddingSubType.Binary, data: number[] }` |
+| `SCHEDULE` | `{ type: "schedule", value: string }` (RFC 5545/7953 iCalendar) |
+| `POINT` | `{ type: "point", lat: number, lon: number, alt?: number }` |
+| `RECT` | `{ type: "rect", minLat: number, minLon: number, maxLat: number, maxLon: number }` |
+| `EMBEDDING` | `{ type: "embedding", subType: EmbeddingSubType, dims: number, data: Uint8Array }` |
 
 ### Genesis IDs
 
