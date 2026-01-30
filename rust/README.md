@@ -62,7 +62,7 @@ assert_eq!(edit.id, decoded.id);
 
 ### Data Types
 
-All 12 GRC-20 data types are supported:
+All 13 GRC-20 data types are supported:
 
 | Type | Rust Representation | Wire Size |
 |------|---------------------|-----------|
@@ -76,7 +76,8 @@ All 12 GRC-20 data types are supported:
 | TIME | `Value::Time(Cow<str>)` | 8 bytes |
 | DATETIME | `Value::Datetime(Cow<str>)` | 10 bytes |
 | SCHEDULE | `Value::Schedule(String)` | variable |
-| POINT | `Value::Point { lon, lat, alt }` | 17-25 bytes |
+| POINT | `Value::Point { lat, lon, alt }` | 17-25 bytes |
+| RECT | `Value::Rect { min_lat, min_lon, max_lat, max_lon }` | 32 bytes |
 | EMBEDDING | `Value::Embedding { sub_type, dims, data }` | variable |
 
 **Temporal types use RFC 3339 strings in the API:**
@@ -184,7 +185,6 @@ let edit = decode_edit_borrowed(&bytes)?;
 // Strings borrow from input buffer - no allocation
 assert!(matches!(edit.name, Cow::Borrowed(_)));
 ```
-- `CreateValueRef` — Create a referenceable ID for a value slot
 
 ### Compression
 
@@ -212,8 +212,7 @@ let name_prop = properties::name();
 let description_prop = properties::description();
 
 // Core types
-let person_type = types::person();
-let organization_type = types::organization();
+let image_type = types::image();
 
 // Core relation types
 let types_rel = relation_types::types();
