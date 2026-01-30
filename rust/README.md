@@ -212,7 +212,7 @@ let name_prop = properties::name();
 let description_prop = properties::description();
 
 // Core types
-let image_type = types::image();
+let person_type = types::person();
 
 // Core relation types
 let types_rel = relation_types::types();
