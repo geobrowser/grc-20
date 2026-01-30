@@ -75,7 +75,7 @@ All 13 GRC-20 data types are supported:
 | DATE | `Value::Date(Cow<str>)` | 6 bytes |
 | TIME | `Value::Time(Cow<str>)` | 8 bytes |
 | DATETIME | `Value::Datetime(Cow<str>)` | 10 bytes |
-| SCHEDULE | `Value::Schedule(String)` | variable |
+| SCHEDULE | `Value::Schedule(Cow<str>)` | variable |
 | POINT | `Value::Point { lat, lon, alt }` | 17-25 bytes |
 | RECT | `Value::Rect { min_lat, min_lon, max_lat, max_lon }` | 32 bytes |
 | EMBEDDING | `Value::Embedding { sub_type, dims, data }` | variable |
