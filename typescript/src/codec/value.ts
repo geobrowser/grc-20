@@ -35,17 +35,17 @@ export interface DictionaryLookups {
  */
 export function encodeValuePayload(writer: Writer, value: Value): void {
   switch (value.type) {
-    case "bool":
+    case "boolean":
       writer.writeByte(value.value ? 0x01 : 0x00);
       break;
 
-    case "int64":
+    case "integer":
       writer.writeSignedVarint(value.value);
       break;
 
-    case "float64":
+    case "float":
       if (Number.isNaN(value.value)) {
-        throw new Error("NaN is not allowed in Float64");
+        throw new Error("NaN is not allowed in Float");
       }
       writer.writeFloat64(value.value);
       break;
@@ -186,7 +186,7 @@ export function encodePropertyValue(
   }
 
   // Write unit index for numerical types
-  if (pv.value.type === "int64" || pv.value.type === "float64" || pv.value.type === "decimal") {
+  if (pv.value.type === "integer" || pv.value.type === "float" || pv.value.type === "decimal") {
     const unitIndex = dicts.getUnitIndex(pv.value.unit);
     writer.writeVarintNumber(unitIndex);
   }
@@ -197,25 +197,25 @@ export function encodePropertyValue(
  */
 export function decodeValuePayload(reader: Reader, dataType: DataType): Value {
   switch (dataType) {
-    case DataType.Bool: {
+    case DataType.Boolean: {
       const byte = reader.readByte();
       if (byte !== 0x00 && byte !== 0x01) {
         throw new DecodeError("E005", `invalid bool value: ${byte}`);
       }
-      return { type: "bool", value: byte === 0x01 };
+      return { type: "boolean", value: byte === 0x01 };
     }
 
-    case DataType.Int64: {
+    case DataType.Integer: {
       const value = reader.readSignedVarint();
-      return { type: "int64", value };
+      return { type: "integer", value };
     }
 
-    case DataType.Float64: {
+    case DataType.Float: {
       const value = reader.readFloat64();
       if (Number.isNaN(value)) {
         throw new DecodeError("E005", "float value is NaN");
       }
-      return { type: "float64", value };
+      return { type: "float", value };
     }
 
     case DataType.Decimal: {
@@ -374,8 +374,8 @@ export function decodePropertyValue(
 
   // Read unit index for numerical types
   if (
-    prop.dataType === DataType.Int64 ||
-    prop.dataType === DataType.Float64 ||
+    prop.dataType === DataType.Integer ||
+    prop.dataType === DataType.Float ||
     prop.dataType === DataType.Decimal
   ) {
     const unitIndex = reader.readVarintNumber();

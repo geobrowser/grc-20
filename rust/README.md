@@ -66,9 +66,9 @@ All 13 GRC-20 data types are supported:
 
 | Type | Rust Representation | Wire Size |
 |------|---------------------|-----------|
-| BOOL | `Value::Bool(bool)` | 1 byte |
-| INT64 | `Value::Int64 { value, unit }` | varint |
-| FLOAT64 | `Value::Float64 { value, unit }` | 8 bytes |
+| BOOLEAN | `Value::Boolean(bool)` | 1 byte |
+| INTEGER | `Value::Integer { value, unit }` | varint |
+| FLOAT | `Value::Float { value, unit }` | 8 bytes |
 | DECIMAL | `Value::Decimal { exponent, mantissa, unit }` | variable |
 | TEXT | `Value::Text { value, language }` | variable |
 | BYTES | `Value::Bytes(Vec<u8>)` | variable |
@@ -113,8 +113,8 @@ let edit = EditBuilder::new(edit_id)
     .author(author_id)
     .create_entity(entity_id, |e| e
         .text(properties::name(), "Hello", None)
-        .int64(count_prop, 42, None)
-        .float64(temp_prop, 98.6, Some(fahrenheit_unit))
+        .integer(count_prop, 42, None)
+        .float(temp_prop, 98.6, Some(fahrenheit_unit))
         .point(location_prop, 40.7128, -74.006)
         .date(birth_prop, "1990-05-15")
         .time(start_prop, "09:00:00")

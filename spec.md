@@ -82,7 +82,7 @@ Types are tags, not classes: no inheritance, no cardinality constraints, no prop
 Properties are entities that define attributes. Property names, descriptions, and data types are defined via values and relations in the knowledge layer, not in the protocol.
 
 ```
-DataType := BOOL | INT64 | FLOAT64 | DECIMAL | TEXT | BYTES
+DataType := BOOLEAN | INTEGER | FLOAT | DECIMAL | TEXT | BYTES
           | DATE | TIME | DATETIME | SCHEDULE | POINT | RECT | EMBEDDING
 ```
 
@@ -94,9 +94,9 @@ DataType := BOOL | INT64 | FLOAT64 | DECIMAL | TEXT | BYTES
 
 | Type | Value | Description |
 |------|-------|-------------|
-| BOOL | 1 | Boolean |
-| INT64 | 2 | 64-bit signed integer |
-| FLOAT64 | 3 | 64-bit IEEE 754 float |
+| BOOLEAN | 1 | Boolean |
+| INTEGER | 2 | 64-bit signed integer |
+| FLOAT | 3 | 64-bit IEEE 754 float |
 | DECIMAL | 4 | Arbitrary-precision decimal |
 | TEXT | 5 | UTF-8 string |
 | BYTES | 6 | Opaque byte array |
@@ -112,9 +112,9 @@ DataType := BOOL | INT64 | FLOAT64 | DECIMAL | TEXT | BYTES
 
 | Type | Encoding | Description |
 |------|----------|-------------|
-| BOOL | 1 byte | 0x00 = false, 0x01 = true; other values invalid |
-| INT64 | Signed varint | -2^63 to 2^63-1 |
-| FLOAT64 | IEEE 754 double, little-endian | 64-bit floating point |
+| BOOLEAN | 1 byte | 0x00 = false, 0x01 = true; other values invalid |
+| INTEGER | Signed varint | -2^63 to 2^63-1 |
+| FLOAT | IEEE 754 double, little-endian | 64-bit floating point |
 | DECIMAL | exponent + mantissa | value = mantissa × 10^exponent |
 | TEXT | UTF-8 string | Length-prefixed |
 | BYTES | Raw bytes | Length-prefixed, opaque |
@@ -122,8 +122,8 @@ DataType := BOOL | INT64 | FLOAT64 | DECIMAL | TEXT | BYTES
 | TIME | 8 bytes | time_us (int48) + offset_min (int16) |
 | DATETIME | 10 bytes | epoch_us (int64) + offset_min (int16) |
 | SCHEDULE | UTF-8 string | RFC 5545/7953 iCalendar content |
-| POINT | 2-3 FLOAT64, little-endian | [lat, lon] or [lat, lon, alt] WGS84 |
-| RECT | 4 FLOAT64, little-endian | [min_lat, min_lon, max_lat, max_lon] WGS84 |
+| POINT | 2-3 FLOAT, little-endian | [lat, lon] or [lat, lon, alt] WGS84 |
+| RECT | 4 FLOAT, little-endian | [min_lat, min_lon, max_lat, max_lon] WGS84 |
 | EMBEDDING | sub_type + dims + bytes | Dense vector for similarity search |
 
 #### DECIMAL
@@ -331,7 +331,7 @@ Value {
   property: ID
   value: <type-specific>
   language: ID?    // TEXT only: language entity reference
-  unit: ID?        // INT64, FLOAT64, DECIMAL only: unit entity reference
+  unit: ID?        // INTEGER, FLOAT, DECIMAL only: unit entity reference
 }
 ```
 
@@ -379,9 +379,9 @@ Without a version pin, the relation refers to the current value. With a version 
 
 Values are unique per (entityId, propertyId), with TEXT values additionally differentiated by language. Setting a value replaces any existing value for that (property, language) combination. For ordered or multiple values, use relations with positions.
 
-**Unit (numerical types only):** INT64, FLOAT64, and DECIMAL values can optionally specify a unit (e.g., kg, USD). Unlike language, unit does NOT affect value uniqueness—setting "100 kg" then "200 lbs" on the same property results in "200 lbs" (the unit is metadata for interpretation).
+**Unit (numerical types only):** INTEGER, FLOAT, and DECIMAL values can optionally specify a unit (e.g., kg, USD). Unlike language, unit does NOT affect value uniqueness—setting "100 kg" then "200 lbs" on the same property results in "200 lbs" (the unit is metadata for interpretation).
 
-**Float value rules (NORMATIVE):** For FLOAT64, POINT, and EMBEDDING (float32 subtype):
+**Float value rules (NORMATIVE):** For FLOAT, POINT, and EMBEDDING (float32 subtype):
 - **NaN is prohibited.** Encoders MUST NOT emit NaN values; decoders MUST reject them (E005). Use a separate "unknown" or "missing" representation at the application layer.
 - **Infinity:** ±Infinity are permitted.
 
@@ -831,7 +831,7 @@ Edits contain dictionaries mapping IDs to indices:
 
 ```
 properties[0] = (ID of "name", TEXT)
-properties[1] = (ID of "age", INT64)
+properties[1] = (ID of "age", INTEGER)
 relation_type_ids[0] = <ID of "Types" relation type>
 ```
 
@@ -845,7 +845,7 @@ The property dictionary includes both ID and DataType. This allows values to omi
 
 **Language dictionary requirement (NORMATIVE):** All languages referenced in TEXT values MUST be declared in the `language_ids` dictionary. Language index 0 means English (no entry required); indices 1+ reference `language_ids[index-1]`. Only TEXT values have the language field.
 
-**Unit dictionary requirement (NORMATIVE):** All units referenced in numerical values (INT64, FLOAT64, DECIMAL) MUST be declared in the `unit_ids` dictionary. Unit index 0 means no unit; indices 1+ reference `unit_ids[index-1]`. Only numerical values have the unit field.
+**Unit dictionary requirement (NORMATIVE):** All units referenced in numerical values (INTEGER, FLOAT, DECIMAL) MUST be declared in the `unit_ids` dictionary. Unit index 0 means no unit; indices 1+ reference `unit_ids[index-1]`. Only numerical values have the unit field.
 
 **Object dictionary requirement (NORMATIVE):** All entities and relations referenced in an edit MUST be declared in the `object_ids` dictionary. This includes: operation targets (UpdateEntity, DeleteEntity, etc.) and relation endpoints when targeting entities. CreateRelation encodes the relation ID inline, so it does not require a dictionary entry unless referenced by other ops in the same edit.
 
@@ -979,7 +979,7 @@ zigzag(n) = (n << 1) ^ (n >> 63)
 
 **UUID:** Raw 16 bytes (no length prefix), big-endian (network byte order). Byte `i` corresponds to hex digits `2i` and `2i+1` of the standard 32-character hex string. For example, UUID `550e8400-e29b-41d4-a716-446655440000` is encoded as bytes `[0x55, 0x0e, 0x84, 0x00, 0xe2, 0x9b, ...]`.
 
-**Float endianness (NORMATIVE):** All IEEE 754 floats (FLOAT64, POINT, EMBEDDING float32) are little-endian.
+**Float endianness (NORMATIVE):** All IEEE 754 floats (FLOAT, POINT, EMBEDDING float32) are little-endian.
 
 ### 6.2 Common Reference Types
 
@@ -1224,20 +1224,20 @@ Value:
   property: PropertyRef
   payload: <type-specific>
   [if DataType == TEXT]: language: LanguageRef
-  [if DataType in (INT64, FLOAT64, DECIMAL)]: unit: UnitRef
+  [if DataType in (INTEGER, FLOAT, DECIMAL)]: unit: UnitRef
 ```
 
 The payload type is determined by the property's DataType (from the properties dictionary).
 
 **Language (TEXT only):** The `language` field is only present for TEXT values. A value with `language = 0` is English. Values with different languages for the same property are distinct and can coexist.
 
-**Unit (numerical types only):** The `unit` field is only present for INT64, FLOAT64, and DECIMAL values. A value with `unit = 0` has no unit. Unlike language, unit does NOT affect value uniqueness—it is metadata for interpretation only.
+**Unit (numerical types only):** The `unit` field is only present for INTEGER, FLOAT, and DECIMAL values. A value with `unit = 0` has no unit. Unlike language, unit does NOT affect value uniqueness—it is metadata for interpretation only.
 
 **Payloads:**
 ```
-Bool: uint8 (0x00 or 0x01)
-Int64: signed_varint
-Float64: 8 bytes, IEEE 754, little-endian
+Boolean: uint8 (0x00 or 0x01)
+Integer: signed_varint
+Float: 8 bytes, IEEE 754, little-endian
 Decimal:
   exponent: signed_varint
   mantissa_type: uint8 (0x00 = varint, 0x01 = bytes)
@@ -1249,8 +1249,8 @@ Date: days: int32 (LE), offset_min: int16 (LE) — 6 bytes total
 Time: time_us: int48 (LE), offset_min: int16 (LE) — 8 bytes total
 Datetime: epoch_us: int64 (LE), offset_min: int16 (LE) — 10 bytes total
 Schedule: len: varint, data: UTF-8 bytes (RFC 5545/7953)
-Point: ordinate_count: uint8 (2 or 3), latitude: Float64, longitude: Float64, [altitude: Float64]
-Rect: min_lat: Float64, min_lon: Float64, max_lat: Float64, max_lon: Float64 — 32 bytes total
+Point: ordinate_count: uint8 (2 or 3), latitude: Float, longitude: Float, [altitude: Float]
+Rect: min_lat: Float, min_lon: Float, max_lat: Float, max_lon: Float — 32 bytes total
 Embedding:
   sub_type: uint8 (0x00=f32, 0x01=i8, 0x02=binary)
   dims: varint
@@ -1344,9 +1344,9 @@ id = derived_uuid("grc20:genesis:datatype:" + type_name)
 
 | Name | Type Name | Derivation |
 |------|-----------|------------|
-| Bool | bool | `derived_uuid("grc20:genesis:datatype:bool")` |
-| Int64 | int64 | `derived_uuid("grc20:genesis:datatype:int64")` |
-| Float64 | float64 | `derived_uuid("grc20:genesis:datatype:float64")` |
+| Boolean | boolean | `derived_uuid("grc20:genesis:datatype:boolean")` |
+| Integer | integer | `derived_uuid("grc20:genesis:datatype:integer")` |
+| Float | float | `derived_uuid("grc20:genesis:datatype:float")` |
 | Decimal | decimal | `derived_uuid("grc20:genesis:datatype:decimal")` |
 | Text | text | `derived_uuid("grc20:genesis:datatype:text")` |
 | Bytes | bytes | `derived_uuid("grc20:genesis:datatype:bytes")` |
@@ -1358,7 +1358,7 @@ id = derived_uuid("grc20:genesis:datatype:" + type_name)
 | Rect | rect | `derived_uuid("grc20:genesis:datatype:rect")` |
 | Embedding | embedding | `derived_uuid("grc20:genesis:datatype:embedding")` |
 
-**Usage:** To indicate that property X expects INT64 values, create a `Data Type` relation from X to the Int64 entity. Applications query this relation to determine the expected type for UX rendering and query construction.
+**Usage:** To indicate that property X expects INTEGER values, create a `Data Type` relation from X to the Integer entity. Applications query this relation to determine the expected type for UX rendering and query construction.
 
 ---
 
@@ -1388,7 +1388,7 @@ Indexers MUST reject edits that fail structural validation:
 | Mantissa bytes | Non-minimal encoding |
 | DECIMAL normalization | Mantissa has trailing zeros, or zero not encoded as {0,0} |
 | Signatures | Invalid (if governance requires) |
-| BOOL values | Not 0x00 or 0x01 |
+| BOOLEAN values | Not 0x00 or 0x01 |
 | POINT bounds | Latitude outside [-90, +90] or longitude outside [-180, +180] |
 | POINT ordinate count | ordinate_count not 2 or 3 |
 | RECT bounds | Latitude outside [-90, +90] or longitude outside [-180, +180] |

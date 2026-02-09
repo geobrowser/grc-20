@@ -87,7 +87,7 @@ import {
   Edit,            // Batch of operations with metadata
   Op,              // Union of all operation types
   Value,           // Union of all value types
-  DataType,        // Enum: Bool, Int64, Float64, Text, etc.
+  DataType,        // Enum: Boolean, Integer, Float, Text, etc.
   PropertyValue,   // Property ID + Value pair
 } from "@geoprotocol/grc-20";
 ```
@@ -113,10 +113,10 @@ const edit = new EditBuilder(editId)
   .setCreatedAt(BigInt(Date.now()) * 1000n)  // microseconds
   .createEntity(entityId, e => e
     .text(propId, "value", languageId)
-    .int64(propId, 42n, unitId)
-    .float64(propId, 3.14, undefined)
+    .integer(propId, 42n, unitId)
+    .float(propId, 3.14, undefined)
     .decimal(propId, { exponent: -2, mantissa: 1234n }, undefined)
-    .bool(propId, true)
+    .boolean(propId, true)
     .bytes(propId, new Uint8Array([1, 2, 3]))
     .point(propId, 40.7128, -74.006)
     .date(propId, "2024-01-15Z")             // RFC 3339 date
@@ -125,7 +125,7 @@ const edit = new EditBuilder(editId)
   )
   .updateEntity(entityId, u => u
     .setText(propId, "new value", undefined)
-    .setInt64(propId, 100n, undefined)
+    .setInteger(propId, 100n, undefined)
     .unsetLanguage(propId, languageId)  // Unset specific language
     .unsetAll(propId)                   // Unset all values for property
   )
@@ -289,9 +289,9 @@ if (!posResult.valid) {
 
 | Type | TypeScript Representation |
 |------|---------------------------|
-| `BOOL` | `{ type: "bool", value: boolean }` |
-| `INT64` | `{ type: "int64", value: bigint, unit?: Id }` |
-| `FLOAT64` | `{ type: "float64", value: number, unit?: Id }` |
+| `BOOLEAN` | `{ type: "boolean", value: boolean }` |
+| `INTEGER` | `{ type: "integer", value: bigint, unit?: Id }` |
+| `FLOAT` | `{ type: "float", value: number, unit?: Id }` |
 | `DECIMAL` | `{ type: "decimal", exponent: number, mantissa: bigint, unit?: Id }` |
 | `TEXT` | `{ type: "text", value: string, language?: Id }` |
 | `BYTES` | `{ type: "bytes", value: Uint8Array }` |

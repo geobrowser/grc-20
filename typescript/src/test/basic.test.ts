@@ -168,7 +168,7 @@ describe("EditBuilder", () => {
       .setCreatedAt(1234567890n)
       .createEntity(entityId, (e) =>
         e.text(properties.name(), "Alice", undefined)
-         .int64(parseId("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")!, 42n, undefined)
+         .integer(parseId("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")!, 42n, undefined)
       )
       .build();
 
@@ -243,7 +243,7 @@ describe("Ops helpers", () => {
     const ops = [
       createEntity({
         id: entityId,
-        values: [{ property: propId, value: { type: "bool", value: true } }],
+        values: [{ property: propId, value: { type: "boolean", value: true } }],
       }),
       createRelation({
         id: relationId,
@@ -527,7 +527,7 @@ describe("Builder vs Ops API Equivalence", () => {
       .setCreatedAt(1000n)
       .createEntity(entity1, (e) =>
         e.text(properties.name(), "Entity One", undefined)
-         .bool(propId, true)
+         .boolean(propId, true)
       )
       .createEntity(entity2, (e) =>
         e.text(properties.name(), "Entity Two", undefined)
@@ -549,7 +549,7 @@ describe("Builder vs Ops API Equivalence", () => {
           id: entity1,
           values: [
             { property: properties.name(), value: { type: "text", value: "Entity One" } },
-            { property: propId, value: { type: "bool", value: true } },
+            { property: propId, value: { type: "boolean", value: true } },
           ],
         }),
         createEntity({
@@ -674,7 +674,7 @@ describe("Codec", () => {
       .setCreatedAt(1234567890000000n)
       .createEntity(entityId, (e) =>
         e.text(properties.name(), "Alice", undefined)
-         .bool(parseId("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")!, true)
+         .boolean(parseId("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")!, true)
       )
       .build();
 
@@ -760,7 +760,7 @@ describe("Codec", () => {
           set: [
             {
               property: propId,
-              value: { type: "int64", value: 1n, unit: undefined },
+              value: { type: "integer", value: 1n, unit: undefined },
             },
           ],
           unset: [{ property: propId, language: { type: "english" } }],
@@ -888,7 +888,7 @@ describe("Codec", () => {
         {
           type: "updateEntity",
           id: entityId,
-          set: [{ property: propId, value: { type: "int64", value: 1n, unit: undefined } }],
+          set: [{ property: propId, value: { type: "integer", value: 1n, unit: undefined } }],
           unset: [],
         },
       ],
@@ -978,7 +978,7 @@ describe("Codec", () => {
         {
           type: "createEntity",
           id: entityId,
-          values: [{ property: propId, value: { type: "int64", value: 1n, unit: undefined } }],
+          values: [{ property: propId, value: { type: "integer", value: 1n, unit: undefined } }],
         },
         {
           type: "createValueRef",
@@ -1052,9 +1052,9 @@ describe("Codec", () => {
     const edit = new EditBuilder(editId)
       .setName("All Types Test")
       .createEntity(entityId, (e) =>
-        e.bool(parseId("11111111111111111111111111111111")!, true)
-         .int64(parseId("22222222222222222222222222222222")!, -42n, undefined)
-         .float64(parseId("33333333333333333333333333333333")!, 3.14159, undefined)
+        e.boolean(parseId("11111111111111111111111111111111")!, true)
+         .integer(parseId("22222222222222222222222222222222")!, -42n, undefined)
+         .float(parseId("33333333333333333333333333333333")!, 3.14159, undefined)
          .text(parseId("44444444444444444444444444444444")!, "Hello World", undefined)
          .bytes(parseId("55555555555555555555555555555555")!, new Uint8Array([1, 2, 3, 4]))
          .schedule(parseId("66666666666666666666666666666666")!, "FREQ=WEEKLY;BYDAY=MO")
@@ -1074,14 +1074,14 @@ describe("Codec", () => {
       expect(op.values.length).toBe(8);
 
       // Check each value type
-      const boolVal = op.values.find(v => v.value.type === "bool");
-      expect(boolVal?.value).toEqual({ type: "bool", value: true });
+      const boolVal = op.values.find(v => v.value.type === "boolean");
+      expect(boolVal?.value).toEqual({ type: "boolean", value: true });
 
-      const intVal = op.values.find(v => v.value.type === "int64");
-      expect(intVal?.value).toEqual({ type: "int64", value: -42n, unit: undefined });
+      const intVal = op.values.find(v => v.value.type === "integer");
+      expect(intVal?.value).toEqual({ type: "integer", value: -42n, unit: undefined });
 
-      const floatVal = op.values.find(v => v.value.type === "float64");
-      if (floatVal?.value.type === "float64") {
+      const floatVal = op.values.find(v => v.value.type === "float");
+      if (floatVal?.value.type === "float") {
         expect(floatVal.value.value).toBeCloseTo(3.14159, 5);
       }
 

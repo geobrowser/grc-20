@@ -205,7 +205,7 @@ fn build_city_entity_grc20<'a>(city: &'a City) -> EntityBuilder<'a> {
     }
 
     if let Some(pop) = city.population {
-        builder = builder.int64(props::POPULATION, pop, None);
+        builder = builder.integer(props::POPULATION, pop, None);
     }
 
     if let (Ok(lat), Ok(lon)) = (city.latitude.parse::<f64>(), city.longitude.parse::<f64>()) {

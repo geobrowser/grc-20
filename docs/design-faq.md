@@ -6,7 +6,7 @@ Common questions and justifications for design decisions.
 
 ## Numerical Types
 
-### Q: Why exactly INT64, FLOAT64, and DECIMAL? Are these the right choices for a global knowledge graph standard?
+### Q: Why exactly INTEGER, FLOAT, and DECIMAL? Are these the right choices for a global knowledge graph standard?
 
 **A:** Yes. This is the canonical "Goldilocks" trio for modern data systems—the exact right balance between minimalism (few types to implement) and coverage (handling every real-world use case).
 
@@ -18,16 +18,16 @@ These three types map perfectly to the three fundamental ways humans measure the
 
 | Type | Domain | What it Represents | Examples |
 |------|--------|-------------------|----------|
-| INT64 | Discrete / Countable | Exact counts, IDs, offsets, time | `count: 42`, `offset: 8492` |
-| FLOAT64 | Continuous / Approximate | Physical measurements where precision is relative | `latitude: 37.77`, `probability: 0.999` |
+| INTEGER | Discrete / Countable | Exact counts, IDs, offsets, time | `count: 42`, `offset: 8492` |
+| FLOAT | Continuous / Approximate | Physical measurements where precision is relative | `latitude: 37.77`, `probability: 0.999` |
 | DECIMAL | Human / Constructed | Values defined by human rules that must be exact | `price: $19.99`, `balance: 1.5 ETH` |
 
 **Why not more types?**
 
 | Rejected Type | Impulse | Reality |
 |---------------|---------|---------|
-| INT32/INT16/BYTE | "Save space on disk!" | Varints already compress small values. Storing `5` in INT64 takes 1 byte. Zero benefit, added complexity. |
-| UINT64 | "Positive-only numbers!" | IDs use UUIDs (128-bit). INT64 maxes at ~9 quintillion—you won't overflow. Signed is safer (no underflow bugs). |
+| INT32/INT16/BYTE | "Save space on disk!" | Varints already compress small values. Storing `5` in INTEGER takes 1 byte. Zero benefit, added complexity. |
+| UINT64 | "Positive-only numbers!" | IDs use UUIDs (128-bit). INTEGER maxes at ~9 quintillion—you won't overflow. Signed is safer (no underflow bugs). |
 | BIGINT | "Crypto has 256-bit values!" | DECIMAL with `exponent: 0` *is* a BigInt. `1 ETH (wei) = { mantissa: 1e18, exponent: 0 }`. |
 
 **Why DECIMAL is particularly strong:**
@@ -41,15 +41,15 @@ DECIMAL { exponent: int32, mantissa: int64 | bytes }
 
 **Implementation sanity:**
 
-| Language | INT64 | FLOAT64 | DECIMAL |
+| Language | INTEGER | FLOAT | DECIMAL |
 |----------|-------|---------|---------|
 | JavaScript | `BigInt` | `Number` | Library (standard practice) |
 | Python | `int` (native arbitrary precision) | `float` | `decimal.Decimal` |
 | Rust/Go/C++ | Native | Native | Struct |
 
 **Verdict:** Keep exactly these three.
-- INT64: The skeleton (counts, times)
-- FLOAT64: The flesh (physics, probability)
+- INTEGER: The skeleton (counts, times)
+- FLOAT: The flesh (physics, probability)
 - DECIMAL: The contract (money, math)
 
 This covers 100% of numerical use cases with 0% redundancy.
@@ -160,11 +160,11 @@ With thousands of IDs per edit, this adds up. Display format is an implementatio
 
 ## Data Types
 
-### Q: Why TEXT for DATE instead of int64 timestamp?
+### Q: Why TEXT for DATE instead of integer timestamp?
 
 **A:** Semantic precision and BCE dates.
 
-An int64 timestamp forces false precision:
+An integer timestamp forces false precision:
 - "1850" becomes `1850-01-01T00:00:00.000000Z`
 - "Sometime in March 2024" becomes... what exactly?
 

@@ -72,9 +72,9 @@ const decoded = decodeEdit(bytes);
 
 | Type | Description |
 |------|-------------|
-| `BOOL` | Boolean value |
-| `INT64` | 64-bit signed integer (with optional unit) |
-| `FLOAT64` | IEEE 754 double precision (with optional unit) |
+| `BOOLEAN` | Boolean value |
+| `INTEGER` | 64-bit signed integer (with optional unit) |
+| `FLOAT` | IEEE 754 double precision (with optional unit) |
 | `DECIMAL` | Arbitrary-precision decimal (with optional unit) |
 | `TEXT` | UTF-8 string (with optional language) |
 | `BYTES` | Opaque byte array |

@@ -398,9 +398,9 @@ fn pv_to_owned(pv: crate::model::PropertyValue<'_>) -> crate::model::PropertyVal
 fn value_to_owned(v: crate::model::Value<'_>) -> crate::model::Value<'static> {
     use crate::model::{DecimalMantissa, Value};
     match v {
-        Value::Bool(b) => Value::Bool(b),
-        Value::Int64 { value, unit } => Value::Int64 { value, unit },
-        Value::Float64 { value, unit } => Value::Float64 { value, unit },
+        Value::Boolean(b) => Value::Boolean(b),
+        Value::Integer { value, unit } => Value::Integer { value, unit },
+        Value::Float { value, unit } => Value::Float { value, unit },
         Value::Decimal { exponent, mantissa, unit } => Value::Decimal {
             exponent,
             mantissa: match mantissa {
@@ -944,7 +944,7 @@ fn encode_op_canonical(
                 use crate::model::UnsetLanguage;
                 writer.write_varint(sorted_unset.len() as u64);
                 for unset in &sorted_unset {
-                    let prop_idx = dict_builder.add_property(unset.property, DataType::Bool);
+                    let prop_idx = dict_builder.add_property(unset.property, DataType::Boolean);
                     writer.write_varint(prop_idx as u64);
                     let lang_value: u32 = match &unset.language {
                         UnsetLanguage::All => 0xFFFFFFFF,
@@ -1253,7 +1253,7 @@ mod tests {
                 id: [2u8; 16],
                 set_properties: vec![PropertyValue {
                     property: [3u8; 16],
-                    value: Value::Int64 { value: 1, unit: None },
+                    value: Value::Integer { value: 1, unit: None },
                 }],
                 unset_values: vec![UnsetValue {
                     property: [3u8; 16],
@@ -1313,7 +1313,7 @@ mod tests {
                     id: [2u8; 16],
                     set_properties: vec![PropertyValue {
                         property: [3u8; 16],
-                        value: Value::Int64 { value: 1, unit: None },
+                        value: Value::Integer { value: 1, unit: None },
                     }],
                     unset_values: vec![],
                     context: None,
@@ -1423,7 +1423,7 @@ mod tests {
                     id: [2u8; 16],
                     values: vec![PropertyValue {
                         property: [3u8; 16],
-                        value: Value::Int64 { value: 1, unit: None },
+                        value: Value::Integer { value: 1, unit: None },
                     }],
                     context: None,
                 }),
@@ -1624,7 +1624,7 @@ mod tests {
                         },
                         PropertyValue {
                             property: prop_b,
-                            value: Value::Int64 { value: 42, unit: None },
+                            value: Value::Integer { value: 42, unit: None },
                         },
                     ],
                     context: None,
@@ -1645,7 +1645,7 @@ mod tests {
                         // Note: prop_b first this time (different insertion order)
                         PropertyValue {
                             property: prop_b,
-                            value: Value::Int64 { value: 42, unit: None },
+                            value: Value::Integer { value: 42, unit: None },
                         },
                         PropertyValue {
                             property: prop_a,
@@ -1831,7 +1831,7 @@ mod tests {
                     values: vec![
                         PropertyValue {
                             property: prop_b, // B first
-                            value: Value::Int64 { value: 42, unit: None },
+                            value: Value::Integer { value: 42, unit: None },
                         },
                         PropertyValue {
                             property: prop_a, // A second

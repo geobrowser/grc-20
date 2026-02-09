@@ -42,34 +42,34 @@ export class UpdateEntityBuilder {
   }
 
   /**
-   * Sets an INT64 value.
+   * Sets an INTEGER value.
    */
-  setInt64(property: Id, value: bigint, unit?: Id): this {
+  setInteger(property: Id, value: bigint, unit?: Id): this {
     this._set.push({
       property,
-      value: { type: "int64", value, unit },
+      value: { type: "integer", value, unit },
     });
     return this;
   }
 
   /**
-   * Sets a FLOAT64 value.
+   * Sets a FLOAT value.
    */
-  setFloat64(property: Id, value: number, unit?: Id): this {
+  setFloat(property: Id, value: number, unit?: Id): this {
     this._set.push({
       property,
-      value: { type: "float64", value, unit },
+      value: { type: "float", value, unit },
     });
     return this;
   }
 
   /**
-   * Sets a BOOL value.
+   * Sets a BOOLEAN value.
    */
-  setBool(property: Id, value: boolean): this {
+  setBoolean(property: Id, value: boolean): this {
     this._set.push({
       property,
-      value: { type: "bool", value },
+      value: { type: "boolean", value },
     });
     return this;
   }

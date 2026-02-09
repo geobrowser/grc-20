@@ -18,9 +18,9 @@
 
 ### Data Integrity
 
-9. **All value types supported** - Must encode/decode all 11 value types: Bool, Int64, Float64, Decimal, Text, Bytes, Timestamp, Date, Point, Embedding, Ref (note: REF is the data type, distinct from Relation entity)
+9. **All value types supported** - Must encode/decode all 11 value types: Boolean, Integer, Float, Decimal, Text, Bytes, Timestamp, Date, Point, Embedding, Ref (note: REF is the data type, distinct from Relation entity)
 10. **All op types supported** - Must encode/decode all 9 op types: CreateEntity, UpdateEntity, DeleteEntity, RestoreEntity, CreateRelation, UpdateRelation, DeleteRelation, RestoreRelation, CreateValueRef
-11. **Lossless precision** - Decimal, Timestamp, and Float64 must preserve full precision through roundtrip
+11. **Lossless precision** - Decimal, Timestamp, and Float must preserve full precision through roundtrip
 
 ## P1: High Priority (Should Have)
 

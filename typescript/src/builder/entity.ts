@@ -28,34 +28,34 @@ export class EntityBuilder {
   }
 
   /**
-   * Adds an INT64 value.
+   * Adds an INTEGER value.
    */
-  int64(property: Id, value: bigint, unit?: Id): this {
+  integer(property: Id, value: bigint, unit?: Id): this {
     this.values.push({
       property,
-      value: { type: "int64", value, unit },
+      value: { type: "integer", value, unit },
     });
     return this;
   }
 
   /**
-   * Adds a FLOAT64 value.
+   * Adds a FLOAT value.
    */
-  float64(property: Id, value: number, unit?: Id): this {
+  float(property: Id, value: number, unit?: Id): this {
     this.values.push({
       property,
-      value: { type: "float64", value, unit },
+      value: { type: "float", value, unit },
     });
     return this;
   }
 
   /**
-   * Adds a BOOL value.
+   * Adds a BOOLEAN value.
    */
-  bool(property: Id, value: boolean): this {
+  boolean(property: Id, value: boolean): this {
     this.values.push({
       property,
-      value: { type: "bool", value },
+      value: { type: "boolean", value },
     });
     return this;
   }

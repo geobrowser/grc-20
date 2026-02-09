@@ -80,8 +80,8 @@ pub enum DecodeError {
     #[error("[E005] invalid embedding sub-type: {sub_type}")]
     InvalidEmbeddingSubType { sub_type: u8 },
 
-    #[error("[E005] invalid bool value: {value} (expected 0x00 or 0x01)")]
-    InvalidBool { value: u8 },
+    #[error("[E005] invalid boolean value: {value} (expected 0x00 or 0x01)")]
+    InvalidBoolean { value: u8 },
 
     #[error("[E005] reserved bits are non-zero in {context}")]
     ReservedBitsSet { context: &'static str },

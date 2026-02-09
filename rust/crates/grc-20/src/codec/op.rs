@@ -722,7 +722,7 @@ fn encode_update_entity(
         writer.write_varint(ue.unset_values.len() as u64);
         for unset in &ue.unset_values {
             // We need the data type to add to dictionary, use a placeholder
-            let idx = dict_builder.add_property(unset.property, DataType::Bool);
+            let idx = dict_builder.add_property(unset.property, DataType::Boolean);
             writer.write_varint(idx as u64);
             // Language encoding: 0xFFFFFFFF = all, 0 = English, 1+ = specific language
             let lang_value: u32 = match &unset.language {
@@ -998,7 +998,7 @@ fn encode_create_value_ref(
     // For CreateValueRef, we need to add the property to the dictionary.
     // Use DataType::Text as a placeholder if language is present, otherwise Bool.
     // The actual data type will be determined by the property's declaration elsewhere.
-    let data_type = if cvr.language.is_some() { DataType::Text } else { DataType::Bool };
+    let data_type = if cvr.language.is_some() { DataType::Text } else { DataType::Boolean };
     let property_index = dict_builder.add_property(cvr.property, data_type);
     writer.write_varint(property_index as u64);
 

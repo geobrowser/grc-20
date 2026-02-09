@@ -639,12 +639,12 @@ mod tests {
         // Second add of same ID returns same index
         assert_eq!(builder.add_property(prop1, DataType::Text), 0);
         // Different ID gets new index
-        assert_eq!(builder.add_property(prop2, DataType::Int64), 1);
+        assert_eq!(builder.add_property(prop2, DataType::Integer), 1);
 
         let dicts = builder.build();
         assert_eq!(dicts.properties.len(), 2);
         assert_eq!(dicts.properties[0], (prop1, DataType::Text));
-        assert_eq!(dicts.properties[1], (prop2, DataType::Int64));
+        assert_eq!(dicts.properties[1], (prop2, DataType::Integer));
     }
 
     #[test]

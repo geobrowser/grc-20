@@ -384,7 +384,7 @@ mod tests {
         let mut update2 = UpdateEntity::new([0; 16]);
         update2.set_properties.push(PropertyValue {
             property: [1; 16],
-            value: crate::model::Value::Bool(true),
+            value: crate::model::Value::Boolean(true),
         });
         assert!(!update2.is_empty());
     }

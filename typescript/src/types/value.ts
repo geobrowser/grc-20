@@ -9,9 +9,9 @@ import {
  * Data types for property values (spec Section 2.4).
  */
 export enum DataType {
-  Bool = 1,
-  Int64 = 2,
-  Float64 = 3,
+  Boolean = 1,
+  Integer = 2,
+  Float = 3,
   Decimal = 4,
   Text = 5,
   Bytes = 6,
@@ -61,9 +61,9 @@ export type DecimalMantissa =
  * A typed value that can be stored on an entity or relation.
  */
 export type Value =
-  | { type: "bool"; value: boolean }
-  | { type: "int64"; value: bigint; unit?: Id }
-  | { type: "float64"; value: number; unit?: Id }
+  | { type: "boolean"; value: boolean }
+  | { type: "integer"; value: bigint; unit?: Id }
+  | { type: "float"; value: number; unit?: Id }
   | { type: "decimal"; exponent: number; mantissa: DecimalMantissa; unit?: Id }
   | { type: "text"; value: string; language?: Id }
   | { type: "bytes"; value: Uint8Array }
@@ -95,12 +95,12 @@ export type Value =
  */
 export function valueDataType(value: Value): DataType {
   switch (value.type) {
-    case "bool":
-      return DataType.Bool;
-    case "int64":
-      return DataType.Int64;
-    case "float64":
-      return DataType.Float64;
+    case "boolean":
+      return DataType.Boolean;
+    case "integer":
+      return DataType.Integer;
+    case "float":
+      return DataType.Float;
     case "decimal":
       return DataType.Decimal;
     case "text":
@@ -146,9 +146,9 @@ export interface Property {
  */
 export function validateValue(value: Value): string | undefined {
   switch (value.type) {
-    case "float64":
+    case "float":
       if (Number.isNaN(value.value)) {
-        return "NaN is not allowed in Float64";
+        return "NaN is not allowed in Float";
       }
       break;
     case "decimal": {

@@ -21,9 +21,9 @@ fn format_value(v: &Value) -> String {
                 format!("\"{}\"", preview)
             }
         }
-        Value::Int64 { value, .. } => format!("{}", value),
-        Value::Float64 { value, .. } => format!("{:.6}", value),
-        Value::Bool(b) => format!("{}", b),
+        Value::Integer { value, .. } => format!("{}", value),
+        Value::Float { value, .. } => format!("{:.6}", value),
+        Value::Boolean(b) => format!("{}", b),
         Value::Date(s) => format!("DATE({})", s),
         Value::Time(s) => format!("TIME({})", s),
         Value::Datetime(s) => format!("DATETIME({})", s),

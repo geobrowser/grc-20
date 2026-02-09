@@ -193,7 +193,7 @@ fn build_city_entity<'a>(city: &'a City) -> EntityBuilder<'a> {
 
     // Population
     if let Some(pop) = city.population {
-        builder = builder.int64(props::POPULATION, pop, None);
+        builder = builder.integer(props::POPULATION, pop, None);
     }
 
     // Location

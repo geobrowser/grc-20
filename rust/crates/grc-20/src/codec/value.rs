@@ -27,9 +27,9 @@ pub fn decode_value<'a>(
     dicts: &WireDictionaries,
 ) -> Result<Value<'a>, DecodeError> {
     match data_type {
-        DataType::Bool => decode_bool(reader),
-        DataType::Int64 => decode_int64(reader, dicts),
-        DataType::Float64 => decode_float64(reader, dicts),
+        DataType::Boolean => decode_boolean(reader),
+        DataType::Integer => decode_integer(reader, dicts),
+        DataType::Float => decode_float(reader, dicts),
         DataType::Decimal => decode_decimal(reader, dicts),
         DataType::Text => decode_text(reader, dicts),
         DataType::Bytes => decode_bytes(reader),
@@ -43,18 +43,18 @@ pub fn decode_value<'a>(
     }
 }
 
-fn decode_bool<'a>(reader: &mut Reader<'a>) -> Result<Value<'a>, DecodeError> {
-    let byte = reader.read_byte("bool")?;
+fn decode_boolean<'a>(reader: &mut Reader<'a>) -> Result<Value<'a>, DecodeError> {
+    let byte = reader.read_byte("boolean")?;
     match byte {
-        0x00 => Ok(Value::Bool(false)),
-        0x01 => Ok(Value::Bool(true)),
-        _ => Err(DecodeError::InvalidBool { value: byte }),
+        0x00 => Ok(Value::Boolean(false)),
+        0x01 => Ok(Value::Boolean(true)),
+        _ => Err(DecodeError::InvalidBoolean { value: byte }),
     }
 }
 
-fn decode_int64<'a>(reader: &mut Reader<'a>, dicts: &WireDictionaries) -> Result<Value<'a>, DecodeError> {
-    let value = reader.read_signed_varint("int64")?;
-    let unit_index = reader.read_varint("int64.unit")? as usize;
+fn decode_integer<'a>(reader: &mut Reader<'a>, dicts: &WireDictionaries) -> Result<Value<'a>, DecodeError> {
+    let value = reader.read_signed_varint("integer")?;
+    let unit_index = reader.read_varint("integer.unit")? as usize;
     let unit = if unit_index == 0 {
         None
     } else {
@@ -68,12 +68,12 @@ fn decode_int64<'a>(reader: &mut Reader<'a>, dicts: &WireDictionaries) -> Result
         }
         Some(dicts.units[idx])
     };
-    Ok(Value::Int64 { value, unit })
+    Ok(Value::Integer { value, unit })
 }
 
-fn decode_float64<'a>(reader: &mut Reader<'a>, dicts: &WireDictionaries) -> Result<Value<'a>, DecodeError> {
-    let value = reader.read_f64("float64")?;
-    let unit_index = reader.read_varint("float64.unit")? as usize;
+fn decode_float<'a>(reader: &mut Reader<'a>, dicts: &WireDictionaries) -> Result<Value<'a>, DecodeError> {
+    let value = reader.read_f64("float")?;
+    let unit_index = reader.read_varint("float.unit")? as usize;
     let unit = if unit_index == 0 {
         None
     } else {
@@ -87,7 +87,7 @@ fn decode_float64<'a>(reader: &mut Reader<'a>, dicts: &WireDictionaries) -> Resu
         }
         Some(dicts.units[idx])
     };
-    Ok(Value::Float64 { value, unit })
+    Ok(Value::Float { value, unit })
 }
 
 fn decode_decimal<'a>(reader: &mut Reader<'a>, dicts: &WireDictionaries) -> Result<Value<'a>, DecodeError> {
@@ -480,15 +480,15 @@ pub fn encode_value(
     dict_builder: &mut DictionaryBuilder,
 ) -> Result<(), EncodeError> {
     match value {
-        Value::Bool(v) => {
+        Value::Boolean(v) => {
             writer.write_byte(if *v { 0x01 } else { 0x00 });
         }
-        Value::Int64 { value, unit } => {
+        Value::Integer { value, unit } => {
             writer.write_signed_varint(*value);
             let unit_index = dict_builder.add_unit(*unit);
             writer.write_varint(unit_index as u64);
         }
-        Value::Float64 { value, unit } => {
+        Value::Float { value, unit } => {
             if value.is_nan() {
                 return Err(EncodeError::FloatIsNan);
             }
@@ -702,9 +702,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_bool_roundtrip() {
+    fn test_boolean_roundtrip() {
         for v in [true, false] {
-            let value = Value::Bool(v);
+            let value = Value::Boolean(v);
             let dicts = WireDictionaries::default();
             let mut dict_builder = DictionaryBuilder::new();
 
@@ -712,16 +712,16 @@ mod tests {
             encode_value(&mut writer, &value, &mut dict_builder).unwrap();
 
             let mut reader = Reader::new(writer.as_bytes());
-            let decoded = decode_value(&mut reader, DataType::Bool, &dicts).unwrap();
+            let decoded = decode_value(&mut reader, DataType::Boolean, &dicts).unwrap();
 
             assert_eq!(value, decoded);
         }
     }
 
     #[test]
-    fn test_int64_roundtrip() {
+    fn test_integer_roundtrip() {
         for v in [0i64, 1, -1, i64::MAX, i64::MIN, 12345678] {
-            let value = Value::Int64 { value: v, unit: None };
+            let value = Value::Integer { value: v, unit: None };
             let mut dict_builder = DictionaryBuilder::new();
 
             let mut writer = Writer::new();
@@ -729,16 +729,16 @@ mod tests {
 
             let dicts = dict_builder.build();
             let mut reader = Reader::new(writer.as_bytes());
-            let decoded = decode_value(&mut reader, DataType::Int64, &dicts).unwrap();
+            let decoded = decode_value(&mut reader, DataType::Integer, &dicts).unwrap();
 
             assert_eq!(value, decoded);
         }
     }
 
     #[test]
-    fn test_float64_roundtrip() {
+    fn test_float_roundtrip() {
         for v in [0.0, 1.0, -1.0, f64::INFINITY, f64::NEG_INFINITY, 3.14159] {
-            let value = Value::Float64 { value: v, unit: None };
+            let value = Value::Float { value: v, unit: None };
             let mut dict_builder = DictionaryBuilder::new();
 
             let mut writer = Writer::new();
@@ -746,7 +746,7 @@ mod tests {
 
             let dicts = dict_builder.build();
             let mut reader = Reader::new(writer.as_bytes());
-            let decoded = decode_value(&mut reader, DataType::Float64, &dicts).unwrap();
+            let decoded = decode_value(&mut reader, DataType::Float, &dicts).unwrap();
 
             assert_eq!(value, decoded);
         }

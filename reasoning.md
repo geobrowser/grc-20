@@ -73,10 +73,10 @@ Within an edit, property P has one datatype. Across edits, P may be encoded with
 This breaks a common assumption in reasoning systems:
 
 * In most logical formalisms, a predicate like `age(Person, Value)` has a consistent value domain.
-* If `age` is sometimes INT64 and sometimes TEXT, a reasoner either:
+* If `age` is sometimes INTEGER and sometimes TEXT, a reasoner either:
 
   * becomes unsound/confused (treats strings as numbers), or
-  * must split predicates by type (e.g., `age_int64`, `age_text`), or
+  * must split predicates by type (e.g., `age_integer`, `age_text`), or
   * run a coercion/validation pipeline before reasoning.
 
 So: **per-edit typing is great for ingestion flexibility, but it’s hostile to canonical semantics unless you add invariants at a higher layer.**
@@ -237,7 +237,7 @@ Options to achieve this:
 * **Governance-level enforcement**: reject edits that declare a different datatype for P than the canonical one for that space.
 * **Normalization pipeline**: allow ingestion of multiple datatypes, but normalize into canonical properties:
 
-  * `age_text` (raw) and `age_int64` (canonical)
+  * `age_text` (raw) and `age_integer` (canonical)
 * **Predicate-splitting semantics**: treat `(property_id, datatype)` as the predicate identity for reasoning. This is workable, but it means “property identity” in reasoning is not just the property UUID.
 
 If you want OWL-like reasoning, you almost certainly want “datatype consistency” as a *constraint*.

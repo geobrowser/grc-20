@@ -115,7 +115,7 @@ mod tests {
     #[test]
     fn test_validate_type_mismatch() {
         let mut schema = SchemaContext::new();
-        schema.add_property([1u8; 16], DataType::Int64);
+        schema.add_property([1u8; 16], DataType::Integer);
 
         let edit = Edit {
             id: [0u8; 16],
@@ -142,7 +142,7 @@ mod tests {
     #[test]
     fn test_validate_type_match() {
         let mut schema = SchemaContext::new();
-        schema.add_property([1u8; 16], DataType::Int64);
+        schema.add_property([1u8; 16], DataType::Integer);
 
         let edit = Edit {
             id: [0u8; 16],
@@ -153,7 +153,7 @@ mod tests {
                 id: [2u8; 16],
                 values: vec![PropertyValue {
                     property: [1u8; 16],
-                    value: Value::Int64 { value: 42, unit: None },
+                    value: Value::Integer { value: 42, unit: None },
                 }],
                 context: None,
             })],

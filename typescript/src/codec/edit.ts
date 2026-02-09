@@ -79,7 +79,7 @@ function validatePropertyValue(value: PropertyValue, context: string): void {
     assertId(value.value.language, `${context}.value.language`);
   }
   if (
-    (value.value.type === "int64" || value.value.type === "float64" || value.value.type === "decimal") &&
+    (value.value.type === "integer" || value.value.type === "float" || value.value.type === "decimal") &&
     value.value.unit !== undefined
   ) {
     assertId(value.value.unit, `${context}.value.unit`);
@@ -682,7 +682,7 @@ function buildDictionaries(ops: Op[]): DictionaryBuilder {
       addLanguage(pv.value.language);
     }
     if (
-      (pv.value.type === "int64" || pv.value.type === "float64" || pv.value.type === "decimal") &&
+      (pv.value.type === "integer" || pv.value.type === "float" || pv.value.type === "decimal") &&
       pv.value.unit
     ) {
       addUnit(pv.value.unit);
@@ -740,7 +740,7 @@ function buildDictionaries(ops: Op[]): DictionaryBuilder {
         break;
       case "createValueRef":
         addObject(op.entity);
-        addProperty(op.property, op.language ? DataType.Text : DataType.Bool);
+        addProperty(op.property, op.language ? DataType.Text : DataType.Boolean);
         if (op.language) {
           addLanguage(op.language);
         }

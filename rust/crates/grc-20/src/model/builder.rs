@@ -300,29 +300,29 @@ impl<'a> EntityBuilder<'a> {
         self
     }
 
-    /// Adds an INT64 value.
-    pub fn int64(mut self, property: Id, value: i64, unit: Option<Id>) -> Self {
+    /// Adds an INTEGER value.
+    pub fn integer(mut self, property: Id, value: i64, unit: Option<Id>) -> Self {
         self.values.push(PropertyValue {
             property,
-            value: Value::Int64 { value, unit },
+            value: Value::Integer { value, unit },
         });
         self
     }
 
-    /// Adds a FLOAT64 value.
-    pub fn float64(mut self, property: Id, value: f64, unit: Option<Id>) -> Self {
+    /// Adds a FLOAT value.
+    pub fn float(mut self, property: Id, value: f64, unit: Option<Id>) -> Self {
         self.values.push(PropertyValue {
             property,
-            value: Value::Float64 { value, unit },
+            value: Value::Float { value, unit },
         });
         self
     }
 
-    /// Adds a BOOL value.
-    pub fn bool(mut self, property: Id, value: bool) -> Self {
+    /// Adds a BOOLEAN value.
+    pub fn boolean(mut self, property: Id, value: bool) -> Self {
         self.values.push(PropertyValue {
             property,
-            value: Value::Bool(value),
+            value: Value::Boolean(value),
         });
         self
     }
@@ -466,29 +466,29 @@ impl<'a> UpdateEntityBuilder<'a> {
         self
     }
 
-    /// Sets an INT64 value.
-    pub fn set_int64(mut self, property: Id, value: i64, unit: Option<Id>) -> Self {
+    /// Sets an INTEGER value.
+    pub fn set_integer(mut self, property: Id, value: i64, unit: Option<Id>) -> Self {
         self.set_properties.push(PropertyValue {
             property,
-            value: Value::Int64 { value, unit },
+            value: Value::Integer { value, unit },
         });
         self
     }
 
-    /// Sets a FLOAT64 value.
-    pub fn set_float64(mut self, property: Id, value: f64, unit: Option<Id>) -> Self {
+    /// Sets a FLOAT value.
+    pub fn set_float(mut self, property: Id, value: f64, unit: Option<Id>) -> Self {
         self.set_properties.push(PropertyValue {
             property,
-            value: Value::Float64 { value, unit },
+            value: Value::Float { value, unit },
         });
         self
     }
 
-    /// Sets a BOOL value.
-    pub fn set_bool(mut self, property: Id, value: bool) -> Self {
+    /// Sets a BOOLEAN value.
+    pub fn set_boolean(mut self, property: Id, value: bool) -> Self {
         self.set_properties.push(PropertyValue {
             property,
-            value: Value::Bool(value),
+            value: Value::Boolean(value),
         });
         self
     }
@@ -845,7 +845,7 @@ mod tests {
             .created_at(1234567890)
             .create_entity(entity_id, |e| {
                 e.text(prop_id, "Hello", None)
-                    .int64([5u8; 16], 42, None)
+                    .integer([5u8; 16], 42, None)
             })
             .build();
 
@@ -944,9 +944,9 @@ mod tests {
         let edit = EditBuilder::new([0u8; 16])
             .create_entity([1u8; 16], |e| {
                 e.text([2u8; 16], "text", None)
-                    .int64([3u8; 16], 123, None)
-                    .float64([4u8; 16], 3.14, None)
-                    .bool([5u8; 16], true)
+                    .integer([3u8; 16], 123, None)
+                    .float([4u8; 16], 3.14, None)
+                    .boolean([5u8; 16], true)
                     .point([6u8; 16], -74.0060, 40.7128, None)
                     .date([7u8; 16], "2024-01-15Z") // RFC 3339 date
                     .time([10u8; 16], "14:30:00Z") // RFC 3339 time

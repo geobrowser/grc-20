@@ -11,9 +11,9 @@ use crate::util::{parse_date_rfc3339, parse_datetime_rfc3339, parse_time_rfc3339
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u8)]
 pub enum DataType {
-    Bool = 1,
-    Int64 = 2,
-    Float64 = 3,
+    Boolean = 1,
+    Integer = 2,
+    Float = 3,
     Decimal = 4,
     Text = 5,
     Bytes = 6,
@@ -30,9 +30,9 @@ impl DataType {
     /// Creates a DataType from its wire representation.
     pub fn from_u8(v: u8) -> Option<DataType> {
         match v {
-            1 => Some(DataType::Bool),
-            2 => Some(DataType::Int64),
-            3 => Some(DataType::Float64),
+            1 => Some(DataType::Boolean),
+            2 => Some(DataType::Integer),
+            3 => Some(DataType::Float),
             4 => Some(DataType::Decimal),
             5 => Some(DataType::Text),
             6 => Some(DataType::Bytes),
@@ -118,17 +118,17 @@ impl DecimalMantissa<'_> {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value<'a> {
     /// Boolean value.
-    Bool(bool),
+    Boolean(bool),
 
     /// 64-bit signed integer with optional unit.
-    Int64 {
+    Integer {
         value: i64,
         /// Unit entity ID, or None for no unit.
         unit: Option<Id>,
     },
 
     /// 64-bit IEEE 754 float (NaN not allowed) with optional unit.
-    Float64 {
+    Float {
         value: f64,
         /// Unit entity ID, or None for no unit.
         unit: Option<Id>,
@@ -199,9 +199,9 @@ impl Value<'_> {
     /// Returns the data type of this value.
     pub fn data_type(&self) -> DataType {
         match self {
-            Value::Bool(_) => DataType::Bool,
-            Value::Int64 { .. } => DataType::Int64,
-            Value::Float64 { .. } => DataType::Float64,
+            Value::Boolean(_) => DataType::Boolean,
+            Value::Integer { .. } => DataType::Integer,
+            Value::Float { .. } => DataType::Float,
             Value::Decimal { .. } => DataType::Decimal,
             Value::Text { .. } => DataType::Text,
             Value::Bytes(_) => DataType::Bytes,
@@ -220,9 +220,9 @@ impl Value<'_> {
     /// Returns an error description if invalid, None if valid.
     pub fn validate(&self) -> Option<&'static str> {
         match self {
-            Value::Float64 { value, .. } => {
+            Value::Float { value, .. } => {
                 if value.is_nan() {
-                    return Some("NaN is not allowed in Float64");
+                    return Some("NaN is not allowed in Float");
                 }
             }
             Value::Decimal { exponent, mantissa, .. } => {
@@ -335,10 +335,10 @@ mod tests {
 
     #[test]
     fn test_value_validation_nan() {
-        assert!(Value::Float64 { value: f64::NAN, unit: None }.validate().is_some());
-        assert!(Value::Float64 { value: f64::INFINITY, unit: None }.validate().is_none());
-        assert!(Value::Float64 { value: -f64::INFINITY, unit: None }.validate().is_none());
-        assert!(Value::Float64 { value: 42.0, unit: None }.validate().is_none());
+        assert!(Value::Float { value: f64::NAN, unit: None }.validate().is_some());
+        assert!(Value::Float { value: f64::INFINITY, unit: None }.validate().is_none());
+        assert!(Value::Float { value: -f64::INFINITY, unit: None }.validate().is_none());
+        assert!(Value::Float { value: 42.0, unit: None }.validate().is_none());
     }
 
     #[test]
