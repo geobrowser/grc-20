@@ -1,5 +1,5 @@
 ---
-GRC: 0020
+GRC: 20
 Title: Knowledge Graph
 Authors: Yaniv Tal, Byron Guina, Preston Mantel, Nik Graf
 Created: 2026-02-12
