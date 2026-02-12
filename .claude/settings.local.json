@@ -8,7 +8,8 @@
       "Bash(cargo build:*)",
       "Bash(npm run test:*)",
       "Bash(xxd:*)",
-      "Bash(printf:*)"
+      "Bash(printf:*)",
+      "Bash(xargs:*)"
     ]
   }
 }

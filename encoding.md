@@ -334,7 +334,43 @@ compressed_data: zstd frame
 
 ---
 
-## 7. Derived UUID Algorithm
+## 7. Encoding Modes
+
+The binary format supports two encoding modes:
+
+- **Fast mode (default):** Dictionary order is implementation-defined (typically insertion order). Optimized for encode speed.
+- **Canonical mode:** Deterministic encoding for reproducible bytes. Required for signing and content deduplication.
+
+### 7.1 Canonical Encoding
+
+Canonical encoding produces deterministic bytes for the same logical edit. Use canonical mode when:
+
+- Computing content hashes for deduplication
+- Creating signatures over edit content
+- Ensuring cross-implementation reproducibility
+- Blockchain anchoring where byte-level determinism matters
+
+> **NORMATIVE:** Canonical encoding rules:
+>
+> 1. **Sorted dictionaries:** All dictionaries (`properties`, `relation_type_ids`, `language_ids`, `unit_ids`, `object_ids`, `context_ids`) MUST be sorted by ID bytes in ascending lexicographic order (unsigned byte comparison).
+>
+> 2. **Sorted authors:** The `authors` list MUST be sorted by ID bytes in ascending lexicographic order. Duplicate author IDs are NOT permitted.
+>
+> 3. **Sorted value lists:** `CreateEntity.values` and `UpdateEntity.set` MUST be sorted by `(propertyRef, languageRef)` in ascending order (property index first, then language index). Duplicate `(property, language)` entries are NOT permitted.
+>
+> 4. **Sorted unset lists:** `UpdateEntity.unset` MUST be sorted by `(propertyRef, language)` in ascending order. Duplicate entries (same property and language) are NOT permitted.
+>
+> 5. **Minimal varints:** This is a general requirement (Section 1), not canonical-only.
+>
+> 6. **Consistent field encoding:** Optional fields use presence flags as specified in Section 4. No additional padding or alignment bytes.
+>
+> 7. **No duplicate dictionary entries:** Each dictionary MUST NOT contain duplicate IDs. Edits with duplicate IDs in any dictionary MUST be rejected.
+
+**Performance note:** Canonical encoding requires sorting dictionaries and authors after collection, which is substantially slower than fast mode. Implementations SHOULD offer both modes.
+
+---
+
+## 8. Derived UUID Algorithm
 
 Some IDs are deterministically derived from their content rather than randomly generated. This is used for relation entity IDs (spec Section 2.6), language IDs (spec Section 7.4), and data type entity IDs (spec Section 7.5).
 
@@ -357,9 +393,9 @@ When deriving from string prefixes (e.g., `"grc20:relation-entity:"`), the strin
 
 ---
 
-## 8. Validation
+## 9. Validation
 
-### 8.1 Structural Validation (Write-Time)
+### 9.1 Structural Validation (Write-Time)
 
 Indexers MUST reject edits that fail structural validation:
 
@@ -416,7 +452,7 @@ Indexers MUST reject edits that fail structural validation:
 
 Decoders SHOULD reject zstd frames with trailing data after decompression.
 
-### 8.2 Error Codes
+### 9.2 Error Codes
 
 | Code | Reason |
 |------|--------|

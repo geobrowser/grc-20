@@ -5,15 +5,15 @@
 
 ## 1. Introduction
 
-GRC-20 is a binary property graph format for decentralized knowledge networks. It defines how to represent, modify, and synchronize graph data across distributed systems.
+GRC-20 is a binary property graph format for decentralized knowledge networks. It defines how to represent, modify, and synchronize graph data across trust boundaries in a distributed setting.
 
 ### 1.1 Design Principles
 
 - **Property graph model** — Entities connected by relations; relations are first-class and can hold attributes
 - **Event-sourced** — All state changes expressed as operations; history is append-only
-- **Sequentially ordered** — On-chain governance provides total ordering; indexers replay ops deterministically
-- **Binary-first** — Optimized for compressed wire size and decode speed
+- **Total ordering** — On-chain publishing provides provenence and global consensus over state
 - **Pluralistic** — Multiple spaces can hold conflicting views; consumers choose trust
+- **Binary encoding** — Optimized for compressed wire size and decode speed
 
 ### 1.2 Terminology
 
@@ -25,28 +25,28 @@ GRC-20 is a binary property graph format for decentralized knowledge networks. I
 | Property | An entity representing a named attribute |
 | Value | A property instance on an object |
 | Value Ref | A referenceable handle for a value slot, identified by ID |
-| Type | A classification tag for entities |
+| Type | A classification label for entities |
 | Op | An atomic operation that modifies graph state |
 | Edit | A batch of ops with metadata |
 | Space | A governance container for edits |
 
 ### 1.3 How It Fits Together
 
-Say we want to add Albert Einstein to a Science space, let's walk through the steps.
+Let's say we want to add Albert Einstein to a Science space, let's walk through the steps.
 
 **Entity and values.** We start by creating an entity with a unique UUID — Einstein's identity in the graph. We attach values: a Name ("Albert Einstein") and a Description ("Theoretical physicist, Nobel laureate"), each referencing a property ID with a TEXT data type.
 
-**Type membership.** To indicate that Einstein is a Person, we create a `Types` relation — a directed edge from the Einstein entity to a Person type entity.
+**Type membership.** To indicate that Einstein is a Person, we create a `Types` relation — a directed edge from the Einstein entity to an entity representing the Person type.
 
-**Relations.** A "Discovered" relation can be created from the Einstein entity to a Relativity topic entity to map that connection. The graph encodes not just attributes but the structure between them.
+**Relations.** A "Discovered" relation can be created from the "Einstein" entity to a "Relativity" topic entity to map that connection. Properties can be included on the relation to describe details about the relationship.
 
-**Ops.** Each Create, Update, or Delete for an Entity or Relation is stored as an event sourced operation that must be processed in series.
+**Ops.** Each mutation — creating, updating, or deleting an entity or relation — is expressed as an atomic operation. Ops are replayed sequentially to reconstruct state.
 
-**Edits.** These operations are bundled into an edit — a batch of ops with author IDs, a timestamp, and dictionaries that map property and relation type IDs to compact indices. An edit is a self-contained patch with no parent references; ordering is determined by on-chain governance.
+**Edits.** These operations are bundled into an edit — a batch of ops with author IDs, a timestamp, and dictionaries for efficient encoding. An edit is a self-contained patch with no parent references; ordering is determined by on-chain governance.
 
 **Publishing.** The edit is serialized to a compact binary format (see `encoding.md`), published to content-addressed storage (IPFS), and its hash is recorded on-chain. Indexers replay accepted edits in governance-defined order, building the resolved state of the space deterministically.
 
-The sections that follow define each of these concepts precisely.
+The sections that follow define each of these concepts precisely for implementers.
 
 ---
 
@@ -81,15 +81,13 @@ Type membership is expressed via `Types` relations (Section 7.1), not a dedicate
 
 Types classify entities — they're how you say "this entity is a Person" or "this entity is a Company." They answer the question: *what kind of thing is this?*
 
-Types are entities that classify other entities via `Types` relations. An entity can have multiple types simultaneously. Types are created using CreateEntity; type names and metadata are added as values in the knowledge layer.
+Types are entities that classify other entities via `Types` relations. An entity can have multiple types simultaneously. Since Types are just entities, they're created using CreateEntity with metadata added as values in the knowledge layer.
 
-Types are tags, not classes: no inheritance, no cardinality constraints, no property enforcement.
+Types are labels, not classes. There's no inheritance and no enforcement at the protocol layer. Cardinality, inference and inheritance rules, and property constraints can be expressed in the knowledge layer.
 
 ### 2.4 Properties
 
-Properties define the attributes you can attach to entities — Name, Description, Date of Birth, Population. They're themselves entities in the graph, which means they can have their own names, descriptions, and data type hints.
-
-Properties are entities that define attributes. Property names, descriptions, and data types are defined via values and relations in the knowledge layer, not in the protocol.
+Properties define the attributes you can attach to entities — Name, Description, Date of Birth, Population. They're themselves entities in the graph, so their names, descriptions, and data types are defined using values and relations in the knowledge layer.
 
 ```
 DataType := BOOLEAN | INTEGER | FLOAT | DECIMAL | TEXT | BYTES
@@ -100,7 +98,7 @@ DataType := BOOLEAN | INTEGER | FLOAT | DECIMAL | TEXT | BYTES
 
 > **NORMATIVE:** All values for a given property within an edit MUST use the same data type. Different edits MAY use different data types for the same property—the data type is per-value metadata, not a global constraint.
 
-**Data type hints:** Property entities SHOULD have a `Data type` relation (Section 7.3) pointing to a data type entity (Section 7.6) to indicate the expected type. This is advisory—applications use it for UX and query defaults, but the protocol does not enforce it.
+**Data type hints:** Property entities SHOULD have a `Data type` relation (Section 7.3) pointing to a data type entity (Section 7.6) to indicate the expected type. This is advisory - applications use it for UX and query defaults, but the protocol does not enforce it.
 
 **Data type enum values:**
 
@@ -238,8 +236,8 @@ Time of day represented as a fixed 8-byte binary value.
 
 ```
 TIME {
-  time_micros: int48    // Microseconds since midnight (0 to 86,399,999,999)
-  offset_min: int16 // Signed UTC offset in minutes (e.g., +330 for +05:30)
+  time_micros: int48   // Microseconds since midnight (0 to 86,399,999,999)
+  offset_min: int16    // Signed UTC offset in minutes (e.g., +330 for +05:30)
 }
 ```
 
@@ -269,7 +267,7 @@ Combined date and time represented as a fixed 10-byte binary value.
 ```
 DATETIME {
   epoch_micros: int64   // Microseconds since Unix epoch (1970-01-01T00:00:00Z)
-  offset_min: int16 // Signed UTC offset in minutes (e.g., +330 for +05:30)
+  offset_min: int16     // Signed UTC offset in minutes (e.g., +330 for +05:30)
 }
 ```
 
@@ -295,7 +293,7 @@ iCalendar component for recurring events and availability, supporting RFC 5545 (
 
 **Examples:**
 ```
-"DTSTART:20240315T090000Z\nRRULE:FREQ=WEEKLY;BYDAY=MO,WE,FR"   // Weekly on Mon/Wed/Fri
+"DTSTART:20240315T090000Z\nRRULE:FREQ=WEEKLY;BYDAY=MO,WE,FR"    // Weekly on Mon/Wed/Fri
 "DTSTART:20240101\nRRULE:FREQ=YEARLY"                           // Annual event
 "FREEBUSY:20240315T090000Z/20240315T170000Z"                    // Free/busy period
 "BEGIN:VAVAILABILITY\nDTSTART:20240101T090000\nDTEND:20240101T170000\nRRULE:FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR\nEND:VAVAILABILITY"  // Business hours
@@ -486,9 +484,9 @@ The `entity` field links to an entity that represents this relation as a node. T
 
 **Multiple relations:** Multiple relations of the same type can exist between the same entities. Each relation has a caller-provided ID.
 
-**Entity ID derivation:** The `entity` field can be explicit (caller-provided) or auto-derived:
+**Relation entity ID derivation:** The `entity` field can be explicit (caller-provided) or auto-derived:
 
-- **Auto-derived (default):** When `entity` is absent in CreateRelation, the entity ID is deterministically computed:
+- **Auto-derived (default):** When `entity` is absent in CreateRelation, the relation entity ID is deterministically computed:
   ```
   entity_id = derived_uuid("grc20:relation-entity:" || relation_id)
   ```
@@ -841,30 +839,27 @@ Edits are how changes get published. They batch operations together with metadat
 ```
 Edit {
   id: ID
-  name: string              // May be empty
-  authors: List<ID>         // The person, organization or agent Space IDs
+  name: string                     // May be empty
+  authors: List<ID>                // The person, organization or agent Space IDs
   created_at: Timestamp
-  properties: List<(ID, DataType)>  // Per-edit type declarations
-  relation_type_ids: List<ID> // The _id fields are dictionaries for efficient encoding
-  language_ids: List<ID>    // Language entities for localized TEXT values
-  unit_ids: List<ID>        // Unit entities for numerical values
+  properties: List<(ID, DataType)> // Per-edit type declarations
+  relation_type_ids: List<ID>      // The _id fields are dictionaries for efficient encoding
+  language_ids: List<ID>           // Language entities for localized TEXT values
+  unit_ids: List<ID>               // Unit entities for numerical values
   object_ids: List<ID>
-  context_ids: List<ID>     // IDs used in contexts (root_ids and edge to_entity_ids)
-  contexts: List<Context>   // Context metadata for grouping (Section 4.5)
+  context_ids: List<ID>            // IDs used in contexts (root_ids and edge to_entity_ids)
+  contexts: List<Context>          // Context metadata for grouping (Section 4.4)
   ops: List<Op>
 }
 ```
 
 Edits are standalone patches. They contain no parent references—ordering is provided by on-chain governance.
 
-**Properties dictionary:** The `properties` list declares the data type for each property used in this edit. All values for a given property within the edit use this type. Different edits MAY declare different types for the same property ID—there is no global type enforcement.
+**Properties dictionary:** The `properties` list declares the data type for each property used in this edit. All values for a given property within the edit use this type. Different edits MAY declare different types for the same property ID - there is no global type enforcement.
 
 **`created_at`** is metadata for audit/display only. It is NOT used for conflict resolution.
 
-**Encoding modes:** This specification defines two encoding modes:
-
-- **Fast mode (default):** Dictionary order is implementation-defined. Optimized for encode speed.
-- **Canonical mode:** Deterministic encoding for reproducible bytes. Required for signing and content deduplication.
+**Encoding modes:** The binary format supports fast mode (default, optimized for encode speed) and canonical mode (deterministic bytes for signing and content deduplication). See [encoding.md](encoding.md) for details.
 
 > **NORMATIVE:** CIDs and signatures MUST be computed over **uncompressed** canonical-mode bytes (the `GRC2` payload). Compression is a transport optimization and is not part of the signed/hashed content. This ensures:
 > - Different zstd implementations/settings don't cause CID divergence
@@ -930,9 +925,9 @@ The property dictionary includes both ID and DataType. This allows values to omi
 
 > **NORMATIVE:** All relation types referenced in an edit MUST be declared in the `relation_type_ids` dictionary.
 
-> **NORMATIVE:** All languages referenced in TEXT values MUST be declared in the `language_ids` dictionary. Language index 0 means English (no entry required); indices 1+ reference `language_ids[index-1]`. Only TEXT values have the language field.
+> **NORMATIVE:** All languages referenced in TEXT values MUST be declared in the `language_ids` dictionary. Only TEXT values have the language field.
 
-> **NORMATIVE:** All units referenced in numerical values (INTEGER, FLOAT, DECIMAL) MUST be declared in the `unit_ids` dictionary. Unit index 0 means no unit; indices 1+ reference `unit_ids[index-1]`. Only numerical values have the unit field.
+> **NORMATIVE:** All units referenced in numerical values (INTEGER, FLOAT, DECIMAL) MUST be declared in the `unit_ids` dictionary. Only numerical values have the unit field.
 
 > **NORMATIVE:** All entities and relations referenced in an edit MUST be declared in the `object_ids` dictionary. This includes: operation targets (UpdateEntity, DeleteEntity, etc.) and relation endpoints when targeting entities. CreateRelation encodes the relation ID inline, so it does not require a dictionary entry unless referenced by other ops in the same edit.
 
@@ -940,40 +935,7 @@ The property dictionary includes both ID and DataType. This allows values to omi
 
 **Value ref endpoints:** Value ref IDs are NOT included in `object_ids`. When a relation endpoint targets a value ref, the ID is encoded inline (see [encoding.md](encoding.md)) rather than as an ObjectRef. This avoids bloating the object dictionary with value ref IDs in provenance-heavy edits.
 
-> **NORMATIVE:** All dictionary counts MUST be ≤ 4,294,967,294 (0xFFFFFFFE). All reference indices MUST be < their respective dictionary count. Out-of-bounds indices MUST be rejected (E002).
-
-**Dictionary ordering:**
-- **Fast mode:** Dictionary order is implementation-defined (typically insertion order).
-- **Canonical mode:** Dictionary entries MUST be sorted by ID bytes (lexicographic, unsigned byte comparison). This ensures identical logical edits produce identical bytes.
-
-### 4.4 Canonical Encoding
-
-Canonical encoding produces deterministic bytes for the same logical edit. Use canonical mode when:
-
-- Computing content hashes for deduplication
-- Creating signatures over edit content
-- Ensuring cross-implementation reproducibility
-- Blockchain anchoring where byte-level determinism matters
-
-> **NORMATIVE:** Canonical encoding rules:
->
-> 1. **Sorted dictionaries:** All dictionaries (`properties`, `relation_type_ids`, `language_ids`, `unit_ids`, `object_ids`) MUST be sorted by ID bytes in ascending lexicographic order (unsigned byte comparison).
->
-> 2. **Sorted authors:** The `authors` list MUST be sorted by ID bytes in ascending lexicographic order. Duplicate author IDs are NOT permitted.
->
-> 3. **Sorted value lists:** `CreateEntity.values` and `UpdateEntity.set` MUST be sorted by `(propertyRef, languageRef)` in ascending order (property index first, then language index). Duplicate `(property, language)` entries are NOT permitted.
->
-> 4. **Sorted unset lists:** `UpdateEntity.unset` MUST be sorted by `(propertyRef, language)` in ascending order. Duplicate entries (same property and language) are NOT permitted.
->
-> 5. **Minimal varints:** (Note: This is now a general requirement per [encoding.md](encoding.md), Section 1, not canonical-only.)
->
-> 6. **Consistent field encoding:** Optional fields use presence flags as specified in [encoding.md](encoding.md). No additional padding or alignment bytes.
->
-> 7. **No duplicate dictionary entries:** Each dictionary MUST NOT contain duplicate IDs. Edits with duplicate IDs in any dictionary MUST be rejected.
-
-**Performance note:** Canonical encoding requires sorting dictionaries and authors after collection, which is substantially slower than fast mode. Implementations SHOULD offer both modes.
-
-### 4.5 Edit Contexts
+### 4.4 Edit Contexts
 
 Edits can include context metadata to support context-aware change grouping (e.g., grouping block changes under their parent entity).
 
@@ -1009,7 +971,7 @@ If `context_ref` is omitted, the op has no explicit context. Multiple ops can sh
 - Allows a single edit to span many contexts
 - Enables UI grouping without changing the diff API surface
 
-### 4.6 Edit Publishing
+### 4.5 Edit Publishing
 
 1. Serialize edit to binary format (Section 6)
 2. Publish to content-addressed storage (IPFS)
@@ -1070,7 +1032,7 @@ The Root Space provides the shared vocabulary that makes the protocol useful out
 | Name | `a126ca530c8e48d5b88882c734c38935` | TEXT | Primary label |
 | Description | `9b1f76ff9711404c861e59dc3fa7d037` | TEXT | Summary text |
 | Types | `8f151ba4de204e3c9cb499ddf96f48f1` | RELATION → Type | Type membership |
-| Cover | `34f535072e6b42c5a84443981a77cfa2` | TEXT | Cover image URL |
+| Cover | `34f535072e6b42c5a84443981a77cfa2` | RELATION → Image | Cover image with IPFS URL on entity |
 
 ### 7.2 Type Properties
 
@@ -1087,10 +1049,15 @@ Properties on Property entities that define data type, constraints, and display 
 | Name | UUID | Date type | Description |
 |------|------|-----------|-------------|
 | Data type | `6d29d57849bb4959baf72cc696b1671a` | RELATION → Data type | Expected data type (Section 7.6) |
-| To entity types | `9eea393f17dd4971a62ea603e8bfec20` | RELATION → Type | Constrains which types a relation property can point to |
+| To entity types | `9eea393f17dd4971a62ea603e8bfec20` | RELATION → Type | Hints for which types a relation property should point to |
 | Renderable type | `2316bbe1c76f463583f23e03b4f1fe46` | RELATION → Renderable type | How the property renders in UI (e.g., URL, Image) |
-| Format | `396f8c72dfd04b5791ea09c1b9321b2f` | TEXT | Display format string (e.g., `https://x.com/{}`) |
-| Is type property | `d2c1a10114e3464a8272f4e75b0f1407` | CHECKBOX | Whether this property appears in the type definition UI |
+| Format | `396f8c72dfd04b5791ea09c1b9321b2f` | TEXT | Display format string (see below) |
+| Is type property | `d2c1a10114e3464a8272f4e75b0f1407` | CHECKBOX | Whether this property's properties should be added as hints on the containing type |
+
+**Format string by renderable type:**
+
+- **Number:** ICU decimal format string (e.g., `¤#,##0.00` for currency, `#,##0.##` for plain numbers)
+- **URL:** Template string with `{}` placeholder for the value (e.g., `https://x.com/{}`, `https://github.com/{}`)
 
 These are advisory — applications use them for UX and query defaults, but the protocol does not enforce type consistency.
 
@@ -1123,7 +1090,6 @@ Data type entities represent the protocol's data types in the knowledge layer. P
 | Point | `df250d17e364413d97792ddaae841e34` |
 | Rect | `1fcdf014220447bfb6d20c0cce7adca2` |
 | Embedding | `f732849378ba4577a33fac5f1c964f18` |
-| Relation | `4b6d9fc1fbfe474c861c83398e1b50d9` |
 
 **Usage:** To indicate that property X expects INTEGER values, create a `Date type` relation from X to the Integer entity. Applications query this relation to determine the expected type for UX rendering and query construction.
 
@@ -1131,7 +1097,7 @@ Data type entities represent the protocol's data types in the knowledge layer. P
 
 ## 8. Resolution
 
-Structural validation (write-time checks for binary format correctness) and error codes are defined in the encoding specification (`encoding.md`, Section 8).
+Structural validation (write-time checks for binary format correctness) and error codes are defined in the encoding specification (`encoding.md`, Section 9).
 
 **Derived ID pre-creation:** Because relation entity IDs are derived deterministically (`derived_uuid("grc20:relation-entity:" || relation_id)`), an attacker can pre-create an entity with that ID and set values before the relation exists. When the relation is later created, it adopts the existing entity with its values. This is known behavior, not a vulnerability—applications concerned about this can verify entity provenance at a higher layer.
 
@@ -1192,3 +1158,9 @@ When an operation arrives, the indexer checks:
 Dangling references are permitted to support cross-space links and out-of-order edit arrival. Applications MAY enforce referential integrity at a higher layer.
 
 ---
+
+## 9. Conclusion
+
+GRC-20 defines a minimal, deterministic foundation for decentralized knowledge graphs. The protocol handles the base primitives - knowledge graph structure, binary encoding, and batched publishing - so that higher layers can focus on domain ontology and logic. Blockchain-based publishing provides provenance and global consensus over the state of the knowledge graph. GRC-20 encodes knowledge across space and time, with pluralism so communities can express different points of view as part of the same system.
+
+With this foundation, users can build an open, composable, verifiable knowledge graph.
