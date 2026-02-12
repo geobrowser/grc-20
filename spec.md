@@ -1,7 +1,10 @@
-# GRC-20 Specification
-
-**Status:** Draft
-**Version:** 0.19.0
+---
+GRC: 0020
+Title: Knowledge Graph
+Authors: Yaniv Tal, Byron Guina, Preston Mantel, Nik Graf
+Created: 2026-02-12
+Stage: Final
+---
 
 ## 1. Introduction
 
@@ -9,11 +12,11 @@ GRC-20 is a binary property graph format for decentralized knowledge networks. I
 
 ### 1.1 Design Principles
 
-- **Property graph model** — Entities connected by relations; relations are first-class and can hold attributes
-- **Event-sourced** — All state changes expressed as operations; history is append-only
-- **Total ordering** — On-chain publishing provides provenence and global consensus over state
-- **Pluralistic** — Multiple spaces can hold conflicting views; consumers choose trust
-- **Binary encoding** — Optimized for compressed wire size and decode speed
+- **Property graph model** - Entities connected by relations; relations are first-class and can hold attributes
+- **Event-sourced** - All state changes expressed as operations; history is append-only
+- **Total ordering** - On-chain publishing provides provenence and global consensus over state
+- **Pluralistic** - Multiple spaces can hold conflicting views; consumers choose trust
+- **Binary encoding** - Optimized for compressed wire size and decode speed
 
 ### 1.2 Terminology
 
@@ -34,15 +37,15 @@ GRC-20 is a binary property graph format for decentralized knowledge networks. I
 
 Let's say we want to add Albert Einstein to a Science space, let's walk through the steps.
 
-**Entity and values.** We start by creating an entity with a unique UUID — Einstein's identity in the graph. We attach values: a Name ("Albert Einstein") and a Description ("Theoretical physicist, Nobel laureate"), each referencing a property ID with a TEXT data type.
+**Entities, properties and values.** We start by creating an entity with a unique UUID - Einstein's identity in the graph. We attach values: a Name ("Albert Einstein") and a Description ("Theoretical physicist, Nobel laureate"), each referencing a property ID with a TEXT data type.
 
-**Type membership.** To indicate that Einstein is a Person, we create a `Types` relation — a directed edge from the Einstein entity to an entity representing the Person type.
+**Type membership.** To indicate that Einstein is a Person, we create a `Types` relation - a directed edge from the Einstein entity to an entity representing the Person type.
 
 **Relations.** A "Discovered" relation can be created from the "Einstein" entity to a "Relativity" topic entity to map that connection. Properties can be included on the relation to describe details about the relationship.
 
-**Ops.** Each mutation — creating, updating, or deleting an entity or relation — is expressed as an atomic operation. Ops are replayed sequentially to reconstruct state.
+**Ops.** Each mutation - creating, updating, or deleting an entity or relation - is expressed as an atomic operation. Ops are replayed sequentially to reconstruct state.
 
-**Edits.** These operations are bundled into an edit — a batch of ops with author IDs, a timestamp, and dictionaries for efficient encoding. An edit is a self-contained patch with no parent references; ordering is determined by on-chain governance.
+**Edits.** These operations are bundled into an edit - a batch of ops with author IDs, a timestamp, and dictionaries for efficient encoding. An edit is a self-contained patch with no parent references; ordering is determined by on-chain governance.
 
 **Publishing.** The edit is serialized to a compact binary format (see `encoding.md`), published to content-addressed storage (IPFS), and its hash is recorded on-chain. Indexers replay accepted edits in governance-defined order, building the resolved state of the space deterministically.
 
@@ -64,7 +67,7 @@ ID := UUID (16 bytes)
 
 ### 2.2 Entities
 
-Entities are the fundamental nodes of the knowledge graph — the people, places, ideas, and things you want to describe. Every piece of structured knowledge starts with an entity.
+Entities are the fundamental nodes of the knowledge graph - the people, places, ideas, and things you want to describe. Every piece of structured knowledge starts with an entity.
 
 ```
 Entity {
@@ -79,7 +82,7 @@ Type membership is expressed via `Types` relations (Section 7.1), not a dedicate
 
 ### 2.3 Types
 
-Types classify entities — they're how you say "this entity is a Person" or "this entity is a Company." They answer the question: *what kind of thing is this?*
+Types classify entities - they're how you say "this entity is a Person" or "this entity is a Company." They answer the question: *what kind of thing is this?*
 
 Types are entities that classify other entities via `Types` relations. An entity can have multiple types simultaneously. Since Types are just entities, they're created using CreateEntity with metadata added as values in the knowledge layer.
 
@@ -87,7 +90,7 @@ Types are labels, not classes. There's no inheritance and no enforcement at the 
 
 ### 2.4 Properties
 
-Properties define the attributes you can attach to entities — Name, Description, Date of Birth, Population. They're themselves entities in the graph, so their names, descriptions, and data types are defined using values and relations in the knowledge layer.
+Properties define the attributes you can attach to entities - Name, Description, Date of Birth, Population. They're themselves entities in the graph, so their names, descriptions, and data types are defined using values and relations in the knowledge layer.
 
 ```
 DataType := BOOLEAN | INTEGER | FLOAT | DECIMAL | TEXT | BYTES
@@ -96,7 +99,7 @@ DataType := BOOLEAN | INTEGER | FLOAT | DECIMAL | TEXT | BYTES
 
 **Data types in edits:** Each edit declares the data type for each property it uses (Section 4.3). This allows values to omit type tags and enables type-specific encoding.
 
-> **NORMATIVE:** All values for a given property within an edit MUST use the same data type. Different edits MAY use different data types for the same property—the data type is per-value metadata, not a global constraint.
+> **NORMATIVE:** All values for a given property within an edit MUST use the same data type. Different edits MAY use different data types for the same property - the data type is per-value metadata, not a global constraint.
 
 **Data type hints:** Property entities SHOULD have a `Data type` relation (Section 7.3) pointing to a data type entity (Section 7.6) to indicate the expected type. This is advisory - applications use it for UX and query defaults, but the protocol does not enforce it.
 
@@ -390,7 +393,7 @@ EMBEDDING {
 
 ### 2.5 Values
 
-A value is a property instance attached to an object — it's how you say "this entity's Name is Albert Einstein" or "this entity's Population is 8,336,817." Values connect an entity to a piece of data through a property.
+A value is a property instance attached to an object - it's how you say "this entity's Name is Albert Einstein" or "this entity's Population is 8,336,817." Values connect an entity to a piece of data through a property.
 
 ```
 Value {
@@ -403,7 +406,7 @@ Value {
 
 The value encoding is determined by the data type declared for the property in the edit's properties dictionary (Section 4.3).
 
-**Value refs:** Value slots can be assigned an ID to enable relations to reference them for provenance, confidence, attribution, or other qualifiers. A value ref (a referenceable handle for a value slot, enabling relations to target values) is created via the CreateValueRef operation (Section 3.4). Once created, a value ref identifies the *slot*, not a specific historical value—it remains stable as the value changes over time.
+**Value refs:** Value slots can be assigned an ID to enable relations to reference them for provenance, confidence, attribution, or other qualifiers. A value ref (a referenceable handle for a value slot, enabling relations to target values) is created via the CreateValueRef operation (Section 3.4). Once created, a value ref identifies the *slot*, not a specific historical value - it remains stable as the value changes over time.
 
 **Referencing values:** To make statements about a value, first create a value ref, then create relations targeting it:
 
@@ -439,13 +442,13 @@ CreateRelation {
 
 Without a version pin, the relation refers to the current value. With a version pin, it refers to the historical value at that edit.
 
-> **NORMATIVE:** When `to_version` (or `from_version`) is an edit ID, the reference resolves to the value as of the **end** of that edit—after all ops in that edit have been applied. This provides a deterministic snapshot point.
+> **NORMATIVE:** When `to_version` (or `from_version`) is an edit ID, the reference resolves to the value as of the **end** of that edit - after all ops in that edit have been applied. This provides a deterministic snapshot point.
 
 **Value uniqueness:**
 
 Values are unique per (entityId, propertyId), with TEXT values additionally differentiated by language. Setting a value replaces any existing value for that (property, language) combination. For ordered or multiple values, use relations with positions.
 
-**Unit (numerical types only):** INTEGER, FLOAT, and DECIMAL values can optionally specify a unit (e.g., kg, USD). Unlike language, unit does NOT affect value uniqueness—setting "100 kg" then "200 lbs" on the same property results in "200 lbs" (the unit is metadata for interpretation).
+**Unit (numerical types only):** INTEGER, FLOAT, and DECIMAL values can optionally specify a unit (e.g., kg, USD). Unlike language, unit does NOT affect value uniqueness - setting "100 kg" then "200 lbs" on the same property results in "200 lbs" (the unit is metadata for interpretation).
 
 > **NORMATIVE:** For FLOAT, POINT, and EMBEDDING (float32 subtype):
 > - **NaN is prohibited.** Encoders MUST NOT emit NaN values; decoders MUST reject them (E005). Use a separate "unknown" or "missing" representation at the application layer.
@@ -453,7 +456,7 @@ Values are unique per (entityId, propertyId), with TEXT values additionally diff
 
 ### 2.6 Relations
 
-Relations connect entities to each other — a person to a company, a company to their products. They're directed edges, but they're also first-class nodes in the graph, which means you can attach metadata to them.
+Relations connect entities to each other - a person to a company, a company to their products. They're directed edges, but they're also first-class nodes in the graph, which means you can attach metadata to them.
 
 ```
 Relation {
@@ -480,7 +483,7 @@ Relation {
 
 The `entity` field links to an entity that represents this relation as a node. This enables relations to be referenced by other relations (meta-edges) and to participate in the graph as first-class nodes. Values are stored on the relation entity, not on the relation itself.
 
-> **NORMATIVE:** CreateRelation implicitly creates the relation entity if it does not exist. No separate CreateEntity op is required. If an entity with the given ID already exists, it is reused—its existing values are preserved and it becomes associated with this relation.
+> **NORMATIVE:** CreateRelation implicitly creates the relation entity if it does not exist. No separate CreateEntity op is required. If an entity with the given ID already exists, it is reused - its existing values are preserved and it becomes associated with this relation.
 
 **Multiple relations:** Multiple relations of the same type can exist between the same entities. Each relation has a caller-provided ID.
 
@@ -523,7 +526,7 @@ midpoint("a", "b") = "aV"
 
 ### 2.7 Per-Space State
 
-Each space maintains its own resolved view of the graph. The same entity can have different values — or exist in one space but not another. This is how GRC-20 supports pluralism: multiple spaces can hold conflicting views, and consumers choose which to trust.
+Each space maintains its own resolved view of the graph. The same entity can have different values - or exist in one space but not another. This is how GRC-20 supports pluralism: multiple spaces can hold conflicting views, and consumers choose which to trust.
 
 > **NORMATIVE:** Resolved state is scoped to a space:
 >
@@ -533,7 +536,7 @@ Each space maintains its own resolved view of the graph. The same entity can hav
 >
 > Where Object is an Entity, Relation, or Value Ref. The same object ID can have different state in different spaces. Multi-space views are computed by resolver policy and MUST preserve provenance.
 
-**Value Ref state:** For value refs, the state includes the slot binding (entity, property, language, space) determined by LWW (Last-Writer-Wins — the operation with the highest position wins) resolution. Value refs are never DELETED (they are immutable once created).
+**Value Ref state:** For value refs, the state includes the slot binding (entity, property, language, space) determined by LWW (Last-Writer-Wins - the operation with the highest position wins) resolution. Value refs are never DELETED (they are immutable once created).
 
 **Object ID namespace:** Entity IDs, Relation IDs, and Value Ref IDs share a single namespace within each space. A given UUID identifies exactly one kind of object.
 
@@ -561,7 +564,7 @@ Schema constraints (required properties, cardinality, patterns, data type enforc
 
 ## 3. Operations
 
-All state changes are expressed as operations (ops). Ops are the atomic building blocks — each one describes a single mutation to the graph. They're batched into edits for publishing, but the semantics are defined per-op.
+All state changes are expressed as operations (ops). Ops are the atomic building blocks - each one describes a single mutation to the graph. They're batched into edits for publishing, but the semantics are defined per-op.
 
 ### 3.1 Op Types
 
@@ -618,7 +621,7 @@ UnsetValue {
 
 Tombstone semantics apply (Section 3.5).
 
-> **NORMATIVE:** `set` semantics: For a given property (and language, for TEXT), `set` replaces the existing value. For TEXT values, each language is treated independently—setting a value for one language does not affect values in other languages.
+> **NORMATIVE:** `set` semantics: For a given property (and language, for TEXT), `set` replaces the existing value. For TEXT values, each language is treated independently - setting a value for one language does not affect values in other languages.
 
 > **NORMATIVE:** `unset` semantics: Clears values for properties. For TEXT properties, the `language` field specifies which slot to clear: `ALL` clears all language slots, absent clears the English slot, and a specific language ID clears that language slot. For non-TEXT properties, `language` MUST be `ALL` and the single value is cleared.
 
@@ -667,7 +670,7 @@ DeleteEntity {
 }
 ```
 
-Transitions the entity to DELETED state (tombstoned — marked as deleted; ignores subsequent updates until explicitly restored). Tombstone semantics apply (Section 3.5).
+Transitions the entity to DELETED state (tombstoned - marked as deleted; ignores subsequent updates until explicitly restored). Tombstone semantics apply (Section 3.5).
 
 Serializer requirements apply (Section 3.7).
 
@@ -685,7 +688,7 @@ Transitions a DELETED entity back to ACTIVE state. Property values are preserved
 > - If the entity is ACTIVE or does not exist, the op is ignored (no-op).
 > - After restore, subsequent updates apply normally.
 
-**Design rationale:** Explicit restore prevents accidental resurrection by stale/offline clients while allowing governance-controlled undo. Random CreateEntity/UpdateEntity cannot bring back deleted entities—only intentional RestoreEntity can.
+**Design rationale:** Explicit restore prevents accidental resurrection by stale/offline clients while allowing governance-controlled undo. Random CreateEntity/UpdateEntity cannot bring back deleted entities - only intentional RestoreEntity can.
 
 **DeleteRelation:**
 ```
@@ -729,7 +732,7 @@ UpdateRelation {
 }
 ```
 
-Updates the relation's mutable fields. Use `unset` to clear a field (remove a pin or position). The structural fields (`entity`, `type`, `from`, `to`) are immutable after creation—to change endpoints, delete and recreate.
+Updates the relation's mutable fields. Use `unset` to clear a field (remove a pin or position). The structural fields (`entity`, `type`, `from`, `to`) are immutable after creation - to change endpoints, delete and recreate.
 
 Tombstone semantics apply (Section 3.5).
 
@@ -761,7 +764,7 @@ A value slot is identified by (entity, property, language, space), where languag
 > - The reverse mapping `value_ref_id → slot` is derived: for a given ID, find all slots whose resolved slot→id equals that ID
 > - If multiple slots resolve to the same ID (due to concurrent ops), relations targeting that ID resolve to the slot whose winning CreateValueRef had the highest OpPosition
 
-Once a value ref wins LWW for a slot, it can be used as an endpoint in relations. The value ref identifies the slot, not a specific value—it remains stable as the value changes over time.
+Once a value ref wins LWW for a slot, it can be used as an endpoint in relations. The value ref identifies the slot, not a specific value - it remains stable as the value changes over time.
 
 **Cross-space value refs:** The `space` field specifies which space contains the value. If omitted, defaults to the current space. This enables referencing values in other spaces for cross-space provenance.
 
@@ -786,7 +789,7 @@ This index is updated incrementally during replay. Without it, resolution requir
 
 ### 3.5 Tombstone Semantics
 
-Tombstones control the lifecycle of entities and relations. When an entity or relation is deleted, it enters a tombstoned state — it's marked as deleted and ignores subsequent updates until explicitly restored.
+Tombstones control the lifecycle of entities and relations. When an entity or relation is deleted, it enters a tombstoned state - it's marked as deleted and ignores subsequent updates until explicitly restored.
 
 > **NORMATIVE:** The authoritative tombstone rules are:
 >
@@ -832,7 +835,7 @@ Indexers are lenient and will process edits even if they contain redundant or co
 
 ## 4. Edits
 
-Edits are how changes get published. They batch operations together with metadata — author attribution, timestamps, and the dictionaries that make the binary format compact. An edit is a self-contained patch: it carries everything needed to apply its changes.
+Edits are how changes get published. They batch operations together with metadata - author attribution, timestamps, and the dictionaries that make the binary format compact. An edit is a self-contained patch: it carries everything needed to apply its changes.
 
 ### 4.1 Edit Structure
 
@@ -853,7 +856,7 @@ Edit {
 }
 ```
 
-Edits are standalone patches. They contain no parent references—ordering is provided by on-chain governance.
+Edits are standalone patches. They contain no parent references - ordering is provided by on-chain governance.
 
 **Properties dictionary:** The `properties` list declares the data type for each property used in this edit. All values for a given property within the edit use this type. Different edits MAY declare different types for the same property ID - there is no global type enforcement.
 
@@ -981,7 +984,7 @@ If `context_ref` is omitted, the op has no explicit context. Multiple ops can sh
 
 ## 5. Spaces
 
-Spaces are governance containers for edits. They define who can publish, how proposals are accepted, and what the rules are. Each space maintains its own view of the graph — its own resolved state.
+Spaces are governance containers for edits. They define who can publish, how proposals are accepted, and what the rules are. Each space maintains its own view of the graph - its own resolved state.
 
 ### 5.1 Pluralism
 
@@ -1023,7 +1026,7 @@ For the complete binary encoding specification, see **[encoding.md](encoding.md)
 
 ## 7. Root Space
 
-The Root Space provides the shared vocabulary that makes the protocol useful out of the box. It defines well-known IDs for universal concepts — properties like Name and Description, schema properties like Types and Date type, content types like Image, and the language and data type entities that other spaces reference. These are the minimum IDs needed at the protocol level; applications may define additional schema on top.
+The Root Space provides the shared vocabulary that makes the protocol useful out of the box. It defines well-known IDs for universal concepts - properties like Name and Description, schema properties like Types and Date type, content types like Image, and the language and data type entities that other spaces reference. These are the minimum IDs needed at the protocol level; applications may define additional schema on top.
 
 ### 7.1 Core Entity Properties
 
@@ -1059,7 +1062,7 @@ Properties on Property entities that define data type, constraints, and display 
 - **Number:** ICU decimal format string (e.g., `¤#,##0.00` for currency, `#,##0.##` for plain numbers)
 - **URL:** Template string with `{}` placeholder for the value (e.g., `https://x.com/{}`, `https://github.com/{}`)
 
-These are advisory — applications use them for UX and query defaults, but the protocol does not enforce type consistency.
+These are advisory - applications use them for UX and query defaults, but the protocol does not enforce type consistency.
 
 ### 7.4 Content Types
 
@@ -1099,7 +1102,7 @@ Data type entities represent the protocol's data types in the knowledge layer. P
 
 Structural validation (write-time checks for binary format correctness) and error codes are defined in the encoding specification (`encoding.md`, Section 9).
 
-**Derived ID pre-creation:** Because relation entity IDs are derived deterministically (`derived_uuid("grc20:relation-entity:" || relation_id)`), an attacker can pre-create an entity with that ID and set values before the relation exists. When the relation is later created, it adopts the existing entity with its values. This is known behavior, not a vulnerability—applications concerned about this can verify entity provenance at a higher layer.
+**Derived ID pre-creation:** Because relation entity IDs are derived deterministically (`derived_uuid("grc20:relation-entity:" || relation_id)`), an attacker can pre-create an entity with that ID and set values before the relation exists. When the relation is later created, it adopts the existing entity with its values. This is known behavior, not a vulnerability - applications concerned about this can verify entity provenance at a higher layer.
 
 **Authentication and authorization:** Signature schemes, key management, and authorization rules are defined by space governance, not this specification. The `authors` field is metadata; how it maps to cryptographic identities and what signatures are required (if any) is determined by the governance layer.
 
