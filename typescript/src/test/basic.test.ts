@@ -1257,6 +1257,222 @@ describe("Codec", () => {
     expect(() => encodeEdit(edit)).toThrow("Invalid RFC 3339 time");
   });
 
+describe("Decimal normalization", () => {
+  it("normalizes i64 mantissa with trailing zeros", () => {
+    const editId = randomId();
+    const entityId = randomId();
+    const propId = randomId();
+
+    // mantissa 100, exponent -2 represents 1.00 — should normalize to mantissa 1, exponent 0
+    const edit: Edit = {
+      id: editId,
+      name: "Decimal Test",
+      authors: [],
+      createdAt: 0n,
+      ops: [
+        {
+          type: "createEntity",
+          id: entityId,
+          values: [
+            { property: propId, value: { type: "decimal", exponent: -2, mantissa: { type: "i64", value: 100n } } },
+          ],
+        },
+      ],
+    };
+
+    const encoded = encodeEdit(edit);
+    const decoded = decodeEdit(encoded);
+
+    const op = decoded.ops[0];
+    expect(op.type).toBe("createEntity");
+    if (op.type === "createEntity") {
+      const val = op.values[0].value;
+      expect(val.type).toBe("decimal");
+      if (val.type === "decimal") {
+        // Should be normalized: 100 * 10^-2 = 1 * 10^0
+        expect(val.mantissa).toEqual({ type: "i64", value: 1n });
+        expect(val.exponent).toBe(0);
+      }
+    }
+  });
+
+  it("normalizes i64 mantissa 1230 with exponent -2", () => {
+    const editId = randomId();
+    const entityId = randomId();
+    const propId = randomId();
+
+    const edit: Edit = {
+      id: editId,
+      name: "Decimal Test",
+      authors: [],
+      createdAt: 0n,
+      ops: [
+        {
+          type: "createEntity",
+          id: entityId,
+          values: [
+            { property: propId, value: { type: "decimal", exponent: -2, mantissa: { type: "i64", value: 1230n } } },
+          ],
+        },
+      ],
+    };
+
+    const encoded = encodeEdit(edit);
+    const decoded = decodeEdit(encoded);
+
+    const op = decoded.ops[0];
+    if (op.type === "createEntity") {
+      const val = op.values[0].value;
+      if (val.type === "decimal") {
+        // 1230 * 10^-2 = 123 * 10^-1
+        expect(val.mantissa).toEqual({ type: "i64", value: 123n });
+        expect(val.exponent).toBe(-1);
+      }
+    }
+  });
+
+  it("normalizes zero mantissa with non-zero exponent", () => {
+    const editId = randomId();
+    const entityId = randomId();
+    const propId = randomId();
+
+    const edit: Edit = {
+      id: editId,
+      name: "Decimal Test",
+      authors: [],
+      createdAt: 0n,
+      ops: [
+        {
+          type: "createEntity",
+          id: entityId,
+          values: [
+            { property: propId, value: { type: "decimal", exponent: 5, mantissa: { type: "i64", value: 0n } } },
+          ],
+        },
+      ],
+    };
+
+    const encoded = encodeEdit(edit);
+    const decoded = decodeEdit(encoded);
+
+    const op = decoded.ops[0];
+    if (op.type === "createEntity") {
+      const val = op.values[0].value;
+      if (val.type === "decimal") {
+        expect(val.mantissa).toEqual({ type: "i64", value: 0n });
+        expect(val.exponent).toBe(0);
+      }
+    }
+  });
+
+  it("does not modify already-normalized decimals", () => {
+    const editId = randomId();
+    const entityId = randomId();
+    const propId = randomId();
+
+    const edit: Edit = {
+      id: editId,
+      name: "Decimal Test",
+      authors: [],
+      createdAt: 0n,
+      ops: [
+        {
+          type: "createEntity",
+          id: entityId,
+          values: [
+            { property: propId, value: { type: "decimal", exponent: -2, mantissa: { type: "i64", value: 12345n } } },
+          ],
+        },
+      ],
+    };
+
+    const encoded = encodeEdit(edit);
+    const decoded = decodeEdit(encoded);
+
+    const op = decoded.ops[0];
+    if (op.type === "createEntity") {
+      const val = op.values[0].value;
+      if (val.type === "decimal") {
+        expect(val.mantissa).toEqual({ type: "i64", value: 12345n });
+        expect(val.exponent).toBe(-2);
+      }
+    }
+  });
+
+  it("normalizes negative mantissa with trailing zeros", () => {
+    const editId = randomId();
+    const entityId = randomId();
+    const propId = randomId();
+
+    const edit: Edit = {
+      id: editId,
+      name: "Decimal Test",
+      authors: [],
+      createdAt: 0n,
+      ops: [
+        {
+          type: "createEntity",
+          id: entityId,
+          values: [
+            { property: propId, value: { type: "decimal", exponent: 0, mantissa: { type: "i64", value: -500n } } },
+          ],
+        },
+      ],
+    };
+
+    const encoded = encodeEdit(edit);
+    const decoded = decodeEdit(encoded);
+
+    const op = decoded.ops[0];
+    if (op.type === "createEntity") {
+      const val = op.values[0].value;
+      if (val.type === "decimal") {
+        // -500 * 10^0 = -5 * 10^2
+        expect(val.mantissa).toEqual({ type: "i64", value: -5n });
+        expect(val.exponent).toBe(2);
+      }
+    }
+  });
+
+  it("normalizes big mantissa with trailing zeros", () => {
+    const editId = randomId();
+    const entityId = randomId();
+    const propId = randomId();
+
+    // Big-endian two's complement for 500: 0x01F4
+    const bigBytes = new Uint8Array([0x01, 0xF4]);
+
+    const edit: Edit = {
+      id: editId,
+      name: "Decimal Test",
+      authors: [],
+      createdAt: 0n,
+      ops: [
+        {
+          type: "createEntity",
+          id: entityId,
+          values: [
+            { property: propId, value: { type: "decimal", exponent: 0, mantissa: { type: "big", bytes: bigBytes } } },
+          ],
+        },
+      ],
+    };
+
+    const encoded = encodeEdit(edit);
+    const decoded = decodeEdit(encoded);
+
+    const op = decoded.ops[0];
+    if (op.type === "createEntity") {
+      const val = op.values[0].value;
+      if (val.type === "decimal") {
+        // 500 * 10^0 = 5 * 10^2, and 5 fits in i64
+        expect(val.mantissa).toEqual({ type: "i64", value: 5n });
+        expect(val.exponent).toBe(2);
+      }
+    }
+  });
+});
+
 describe("Compression", () => {
   it("isCompressed detects GRC2Z magic", () => {
     const compressed = new Uint8Array([0x47, 0x52, 0x43, 0x32, 0x5a, 0x00]); // "GRC2Z" + data

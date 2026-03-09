@@ -150,17 +150,119 @@ export function encodeValuePayload(writer: Writer, value: Value): void {
 }
 
 /**
- * Encodes a decimal value.
+ * Normalizes a decimal value by stripping trailing zeros from the mantissa
+ * and adjusting the exponent accordingly.
+ *
+ * Examples:
+ * - (mantissa: 100, exponent: -2) → (mantissa: 1, exponent: 0)
+ * - (mantissa: 1230, exponent: -2) → (mantissa: 123, exponent: -1)
+ * - (mantissa: 0, exponent: 5) → (mantissa: 0, exponent: 0)
+ */
+function normalizeDecimal(
+  exponent: number,
+  mantissa: DecimalMantissa
+): { exponent: number; mantissa: DecimalMantissa } {
+  if (mantissa.type === "i64") {
+    let value = mantissa.value;
+    let exp = exponent;
+
+    // Zero mantissa must have exponent 0
+    if (value === 0n) {
+      return { exponent: 0, mantissa: { type: "i64", value: 0n } };
+    }
+
+    // Strip trailing zeros
+    while (value !== 0n && value % 10n === 0n) {
+      value = value / 10n;
+      exp += 1;
+    }
+
+    return { exponent: exp, mantissa: { type: "i64", value } };
+  } else {
+    // Big mantissa (big-endian two's complement bytes)
+    const bytes = mantissa.bytes;
+
+    // Check if zero
+    if (bytes.every((b) => b === 0)) {
+      return { exponent: 0, mantissa: { type: "i64", value: 0n } };
+    }
+
+    // Convert big-endian two's complement to BigInt for normalization
+    const isNegative = bytes.length > 0 && (bytes[0] & 0x80) !== 0;
+    let value = 0n;
+    for (const byte of bytes) {
+      value = (value << 8n) | BigInt(byte);
+    }
+    // If negative, sign-extend: the bytes represent a two's complement value
+    if (isNegative) {
+      value = value - (1n << BigInt(bytes.length * 8));
+    }
+
+    // Strip trailing zeros
+    let exp = exponent;
+    while (value !== 0n && value % 10n === 0n) {
+      value = value / 10n;
+      exp += 1;
+    }
+
+    // If it fits in i64 range, use i64 encoding (more compact)
+    if (value >= -9223372036854775808n && value <= 9223372036854775807n) {
+      return { exponent: exp, mantissa: { type: "i64", value } };
+    }
+
+    // Convert back to big-endian two's complement bytes (minimal encoding)
+    const resultBytes = bigIntToMinimalTwosComplement(value);
+    return { exponent: exp, mantissa: { type: "big", bytes: resultBytes } };
+  }
+}
+
+/**
+ * Converts a BigInt to minimal big-endian two's complement bytes.
+ */
+function bigIntToMinimalTwosComplement(value: bigint): Uint8Array {
+  if (value === 0n) {
+    return new Uint8Array([0]);
+  }
+
+  const isNegative = value < 0n;
+  // Work with the absolute value to determine byte count,
+  // then encode in two's complement
+  const abs = isNegative ? -value : value;
+
+  // Determine how many bytes we need
+  const bitLen = abs.toString(2).length;
+  // +1 for sign bit, then round up to bytes
+  const byteLen = Math.ceil((bitLen + 1) / 8);
+
+  // Encode in two's complement
+  let encoded = isNegative
+    ? (1n << BigInt(byteLen * 8)) + value // two's complement for negative
+    : value;
+
+  const bytes = new Uint8Array(byteLen);
+  for (let i = byteLen - 1; i >= 0; i--) {
+    bytes[i] = Number(encoded & 0xFFn);
+    encoded >>= 8n;
+  }
+
+  return bytes;
+}
+
+/**
+ * Encodes a decimal value. Normalizes the mantissa/exponent before encoding
+ * to ensure trailing zeros are stripped.
  */
 function encodeDecimal(writer: Writer, exponent: number, mantissa: DecimalMantissa): void {
-  writer.writeSignedVarint(BigInt(exponent));
+  const normalized = normalizeDecimal(exponent, mantissa);
 
-  if (mantissa.type === "i64") {
+  writer.writeSignedVarint(BigInt(normalized.exponent));
+
+  if (normalized.mantissa.type === "i64") {
     writer.writeByte(0x00); // mantissa_type = varint
-    writer.writeSignedVarint(mantissa.value);
+    writer.writeSignedVarint(normalized.mantissa.value);
   } else {
     writer.writeByte(0x01); // mantissa_type = bytes
-    writer.writeLengthPrefixedBytes(mantissa.bytes);
+    writer.writeLengthPrefixedBytes(normalized.mantissa.bytes);
   }
 }
 
