@@ -1526,6 +1526,35 @@ describe("Decimal normalization", () => {
     const encodedBytes = reader.readLengthPrefixedBytes();
     expect(encodedBytes).toEqual(new Uint8Array([0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]));
   });
+
+  it("re-encodes non-minimal big mantissas to canonical bytes", () => {
+    const writer = new Writer();
+    encodeValuePayload(writer, {
+      type: "decimal",
+      exponent: 0,
+      mantissa: {
+        type: "big",
+        bytes: new Uint8Array([0x00, 0x01, 0x23, 0x45, 0x67, 0x89, 0xAB, 0xCD, 0xEF, 0x01]),
+      },
+    });
+
+    const reader = new Reader(writer.finish());
+    expect(reader.readSignedVarint()).toBe(0n);
+    expect(reader.readByte()).toBe(0x01);
+    expect(reader.readLengthPrefixedBytes()).toEqual(
+      new Uint8Array([0x01, 0x23, 0x45, 0x67, 0x89, 0xAB, 0xCD, 0xEF, 0x01])
+    );
+  });
+
+  it("rejects non-minimal decimal mantissa bytes on decode", () => {
+    const writer = new Writer();
+    writer.writeSignedVarint(0n);
+    writer.writeByte(0x01);
+    writer.writeLengthPrefixedBytes(new Uint8Array([0x00, 0x7F]));
+
+    expect(() => decodeValuePayload(new Reader(writer.finish()), DataType.Decimal))
+      .toThrow("decimal mantissa bytes are not minimal");
+  });
 });
 
 describe("Compression", () => {

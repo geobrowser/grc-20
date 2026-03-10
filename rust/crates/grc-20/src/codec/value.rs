@@ -168,6 +168,12 @@ fn is_big_mantissa_zero(bytes: &[u8]) -> bool {
     bytes.iter().all(|&b| b == 0)
 }
 
+fn has_redundant_sign_extension(bytes: &[u8]) -> bool {
+    bytes.len() > 1
+        && ((bytes[0] == 0x00 && (bytes[1] & 0x80) == 0)
+            || (bytes[0] == 0xFF && (bytes[1] & 0x80) != 0))
+}
+
 /// Checks if a big-endian two's complement mantissa is divisible by 10.
 ///
 /// A number is divisible by 10 if its remainder when divided by 10 is 0.
@@ -681,7 +687,8 @@ fn decimal_needs_canonicalization(exponent: i32, mantissa: &DecimalMantissa<'_>)
     match mantissa {
         DecimalMantissa::I64(v) => (*v == 0 && exponent != 0) || (*v != 0 && *v % 10 == 0),
         DecimalMantissa::Big(bytes) => {
-            is_big_mantissa_zero(bytes)
+            has_redundant_sign_extension(bytes)
+                || is_big_mantissa_zero(bytes)
                 || is_big_mantissa_divisible_by_10(bytes)
                 || twos_complement_bytes_to_i64(bytes).is_some()
         }
@@ -1765,6 +1772,40 @@ mod tests {
                 );
             }
             other => panic!("expected large normalized Decimal, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_encode_decimal_trims_non_minimal_big_mantissa_bytes() {
+        let dicts = WireDictionaries::default();
+        let mut dict_builder = DictionaryBuilder::new();
+        let value = Value::Decimal {
+            exponent: 0,
+            mantissa: DecimalMantissa::Big(Cow::Owned(vec![
+                0x00, 0x01, 0x23, 0x45, 0x67, 0x89, 0xAB, 0xCD, 0xEF, 0x01,
+            ])),
+            unit: None,
+        };
+
+        let mut writer = Writer::new();
+        encode_value(&mut writer, &value, &mut dict_builder).unwrap();
+
+        let mut reader = Reader::new(writer.as_bytes());
+        let decoded = decode_value(&mut reader, DataType::Decimal, &dicts).unwrap();
+
+        match decoded {
+            Value::Decimal {
+                exponent,
+                mantissa: DecimalMantissa::Big(bytes),
+                ..
+            } => {
+                assert_eq!(exponent, 0);
+                assert_eq!(
+                    bytes.as_ref(),
+                    &[0x01, 0x23, 0x45, 0x67, 0x89, 0xAB, 0xCD, 0xEF, 0x01]
+                );
+            }
+            other => panic!("expected canonical big Decimal, got {other:?}"),
         }
     }
 }

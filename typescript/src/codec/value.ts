@@ -181,29 +181,33 @@ function normalizeDecimal(
   } else {
     const bytes = mantissa.bytes;
 
-    if (bytes.every((b) => b === 0)) {
+    if (isBigMantissaZero(bytes)) {
       return { exponent: 0, mantissa: { type: "i64", value: 0n } };
     }
 
-    const value = twosComplementBytesToBigInt(bytes);
-
-    let exp = exponent;
-    let normalized = value;
-    while (normalized !== 0n && normalized % 10n === 0n) {
-      normalized = normalized / 10n;
-      exp += 1;
-    }
-
-    if (normalized >= -9223372036854775808n && normalized <= 9223372036854775807n) {
-      return { exponent: exp, mantissa: { type: "i64", value: normalized } };
-    }
-
-    if (normalized === value && exp === exponent) {
+    if (!bigMantissaNeedsCanonicalization(exponent, bytes)) {
       return { exponent, mantissa };
     }
 
-    const resultBytes = bigIntToMinimalTwosComplement(normalized);
-    return { exponent: exp, mantissa: { type: "big", bytes: resultBytes } };
+    let exp = exponent;
+    const isNegative = (bytes[0] & 0x80) !== 0;
+    let magnitude = twosComplementAbsBytes(bytes);
+    while (true) {
+      const { quotient, remainder } = divideUnsignedBeBy10(magnitude);
+      if (remainder !== 0) {
+        break;
+      }
+      magnitude = quotient;
+      exp += 1;
+    }
+
+    const canonicalBytes = signedBytesFromMagnitude(isNegative, magnitude);
+    const i64Value = twosComplementBytesToI64(canonicalBytes);
+    if (i64Value !== null) {
+      return { exponent: exp, mantissa: { type: "i64", value: i64Value } };
+    }
+
+    return { exponent: exp, mantissa: { type: "big", bytes: canonicalBytes } };
   }
 }
 
@@ -239,20 +243,8 @@ function bigIntToMinimalTwosComplement(value: bigint): Uint8Array {
   return trimTwosComplement(bytes);
 }
 
-function twosComplementBytesToBigInt(bytes: Uint8Array): bigint {
-  if (bytes.length === 0) {
-    return 0n;
-  }
-
-  const isNegative = (bytes[0] & 0x80) !== 0;
-  let value = 0n;
-  for (const byte of bytes) {
-    value = (value << 8n) | BigInt(byte);
-  }
-  if (isNegative) {
-    value -= 1n << BigInt(bytes.length * 8);
-  }
-  return value;
+function isBigMantissaZero(bytes: Uint8Array): boolean {
+  return bytes.every((byte) => byte === 0);
 }
 
 function hasRedundantSignExtension(bytes: Uint8Array): boolean {
@@ -273,6 +265,148 @@ function trimTwosComplement(bytes: Uint8Array): Uint8Array {
     break;
   }
   return start === 0 ? bytes : bytes.slice(start);
+}
+
+function bigMantissaNeedsCanonicalization(exponent: number, bytes: Uint8Array): boolean {
+  return hasRedundantSignExtension(bytes)
+    || isBigMantissaZero(bytes)
+    || isBigMantissaDivisibleBy10(bytes)
+    || twosComplementBytesToI64(bytes) !== null;
+}
+
+function isBigMantissaDivisibleBy10(bytes: Uint8Array): boolean {
+  if (bytes.length === 0) {
+    return true;
+  }
+
+  const isNegative = (bytes[0] & 0x80) !== 0;
+  if (isNegative) {
+    return twosComplementAbsMod10(bytes) === 0;
+  }
+
+  let remainder = 0;
+  for (const byte of bytes) {
+    remainder = (remainder * 6 + byte) % 10;
+  }
+  return remainder === 0;
+}
+
+function twosComplementAbsMod10(bytes: Uint8Array): number {
+  let remainder = 0;
+  for (const byte of bytes) {
+    remainder = (remainder * 6 + (~byte & 0xFF)) % 10;
+  }
+  return (remainder + 1) % 10;
+}
+
+function twosComplementAbsBytes(bytes: Uint8Array): Uint8Array {
+  if (bytes.length === 0) {
+    return new Uint8Array();
+  }
+
+  if ((bytes[0] & 0x80) === 0) {
+    let start = 0;
+    while (start < bytes.length && bytes[start] === 0) {
+      start += 1;
+    }
+    return bytes.slice(start);
+  }
+
+  const magnitude = new Uint8Array(bytes.length);
+  let carry = 1;
+  for (let i = bytes.length - 1; i >= 0; i--) {
+    const sum = (~bytes[i] & 0xFF) + carry;
+    magnitude[i] = sum & 0xFF;
+    carry = sum >> 8;
+  }
+
+  let start = 0;
+  while (start < magnitude.length && magnitude[start] === 0) {
+    start += 1;
+  }
+  return magnitude.slice(start);
+}
+
+function divideUnsignedBeBy10(bytes: Uint8Array): { quotient: Uint8Array; remainder: number } {
+  const quotient = new Uint8Array(bytes.length);
+  let remainder = 0;
+
+  for (let i = 0; i < bytes.length; i++) {
+    const current = (remainder << 8) | bytes[i];
+    quotient[i] = Math.floor(current / 10);
+    remainder = current % 10;
+  }
+
+  let start = 0;
+  while (start < quotient.length && quotient[start] === 0) {
+    start += 1;
+  }
+  return { quotient: quotient.slice(start), remainder };
+}
+
+function signedBytesFromMagnitude(isNegative: boolean, magnitude: Uint8Array): Uint8Array {
+  if (magnitude.length === 0) {
+    return new Uint8Array([0]);
+  }
+
+  let start = 0;
+  while (start < magnitude.length && magnitude[start] === 0) {
+    start += 1;
+  }
+  const trimmed = magnitude.slice(start);
+  if (trimmed.length === 0) {
+    return new Uint8Array([0]);
+  }
+
+  if (!isNegative) {
+    if ((trimmed[0] & 0x80) === 0) {
+      return trimmed;
+    }
+    const bytes = new Uint8Array(trimmed.length + 1);
+    bytes.set(trimmed, 1);
+    return bytes;
+  }
+
+  const fitsInCurrentWidth = trimmed[0] < 0x80
+    || (trimmed[0] === 0x80 && trimmed.slice(1).every((byte) => byte === 0));
+  const width = fitsInCurrentWidth ? trimmed.length : trimmed.length + 1;
+  const bytes = new Uint8Array(width);
+  bytes.set(trimmed, width - trimmed.length);
+
+  for (let i = 0; i < bytes.length; i++) {
+    bytes[i] = ~bytes[i] & 0xFF;
+  }
+
+  let carry = 1;
+  for (let i = bytes.length - 1; i >= 0; i--) {
+    const sum = bytes[i] + carry;
+    bytes[i] = sum & 0xFF;
+    carry = sum >> 8;
+  }
+
+  return trimTwosComplement(bytes);
+}
+
+function twosComplementBytesToI64(bytes: Uint8Array): bigint | null {
+  if (bytes.length === 0) {
+    return 0n;
+  }
+  if (bytes.length > 8) {
+    return null;
+  }
+
+  const fill = (bytes[0] & 0x80) !== 0 ? 0xFF : 0x00;
+  let value = 0n;
+  for (let i = 0; i < 8 - bytes.length; i++) {
+    value = (value << 8n) | BigInt(fill);
+  }
+  for (const byte of bytes) {
+    value = (value << 8n) | BigInt(byte);
+  }
+  if ((value & (1n << 63n)) !== 0n) {
+    value -= 1n << 64n;
+  }
+  return value;
 }
 
 /**
