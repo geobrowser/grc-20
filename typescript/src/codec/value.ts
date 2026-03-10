@@ -489,7 +489,7 @@ export function decodeValuePayload(reader: Reader, dataType: DataType): Value {
         mantissa = { type: "i64", value: reader.readSignedVarint() };
       } else if (mantissaType === 0x01) {
         const bytes = reader.readLengthPrefixedBytes();
-        if (hasRedundantSignExtension(bytes)) {
+        if (bytes.length === 0 || hasRedundantSignExtension(bytes)) {
           throw new DecodeError("E005", "decimal mantissa bytes are not minimal");
         }
         mantissa = { type: "big", bytes };

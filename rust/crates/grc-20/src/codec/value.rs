@@ -114,17 +114,19 @@ fn decode_decimal<'a>(
             let len = reader.read_varint("decimal.mantissa_len")? as usize;
             let bytes = reader.read_bytes(len, "decimal.mantissa_bytes")?;
 
+            if bytes.is_empty() {
+                return Err(DecodeError::DecimalMantissaNotMinimal);
+            }
+
             // Validate minimal encoding
-            if !bytes.is_empty() {
-                let first = bytes[0];
-                // Check for redundant sign extension
-                if bytes.len() > 1 {
-                    let second = bytes[1];
-                    if (first == 0x00 && (second & 0x80) == 0)
-                        || (first == 0xFF && (second & 0x80) != 0)
-                    {
-                        return Err(DecodeError::DecimalMantissaNotMinimal);
-                    }
+            let first = bytes[0];
+            // Check for redundant sign extension
+            if bytes.len() > 1 {
+                let second = bytes[1];
+                if (first == 0x00 && (second & 0x80) == 0)
+                    || (first == 0xFF && (second & 0x80) != 0)
+                {
+                    return Err(DecodeError::DecimalMantissaNotMinimal);
                 }
             }
 
@@ -1807,5 +1809,20 @@ mod tests {
             }
             other => panic!("expected canonical big Decimal, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn test_decode_decimal_rejects_empty_big_mantissa_bytes() {
+        let dicts = WireDictionaries::default();
+
+        let mut writer = Writer::new();
+        writer.write_signed_varint(0);
+        writer.write_byte(0x01);
+        writer.write_varint(0);
+        writer.write_varint(0);
+
+        let mut reader = Reader::new(writer.as_bytes());
+        let err = decode_value(&mut reader, DataType::Decimal, &dicts).unwrap_err();
+        assert_eq!(err, DecodeError::DecimalMantissaNotMinimal);
     }
 }

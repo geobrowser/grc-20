@@ -1555,6 +1555,16 @@ describe("Decimal normalization", () => {
     expect(() => decodeValuePayload(new Reader(writer.finish()), DataType.Decimal))
       .toThrow("decimal mantissa bytes are not minimal");
   });
+
+  it("rejects empty big mantissa bytes on decode", () => {
+    const writer = new Writer();
+    writer.writeSignedVarint(0n);
+    writer.writeByte(0x01);
+    writer.writeLengthPrefixedBytes(new Uint8Array([]));
+
+    expect(() => decodeValuePayload(new Reader(writer.finish()), DataType.Decimal))
+      .toThrow("decimal mantissa bytes are not minimal");
+  });
 });
 
 describe("Compression", () => {
