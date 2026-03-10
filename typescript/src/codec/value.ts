@@ -185,7 +185,7 @@ function normalizeDecimal(
       return { exponent: 0, mantissa: { type: "i64", value: 0n } };
     }
 
-    if (!bigMantissaNeedsCanonicalization(exponent, bytes)) {
+    if (!bigMantissaNeedsCanonicalization(bytes)) {
       return { exponent, mantissa };
     }
 
@@ -209,38 +209,6 @@ function normalizeDecimal(
 
     return { exponent: exp, mantissa: { type: "big", bytes: canonicalBytes } };
   }
-}
-
-/**
- * Converts a BigInt to minimal big-endian two's complement bytes.
- */
-function bigIntToMinimalTwosComplement(value: bigint): Uint8Array {
-  if (value === 0n) {
-    return new Uint8Array([0]);
-  }
-
-  const isNegative = value < 0n;
-  // Work with the absolute value to determine byte count,
-  // then encode in two's complement
-  const abs = isNegative ? -value : value;
-
-  // Determine how many bytes we need
-  const bitLen = abs.toString(2).length;
-  // +1 for sign bit, then round up to bytes
-  const byteLen = Math.ceil((bitLen + 1) / 8);
-
-  // Encode in two's complement
-  let encoded = isNegative
-    ? (1n << BigInt(byteLen * 8)) + value // two's complement for negative
-    : value;
-
-  const bytes = new Uint8Array(byteLen);
-  for (let i = byteLen - 1; i >= 0; i--) {
-    bytes[i] = Number(encoded & 0xFFn);
-    encoded >>= 8n;
-  }
-
-  return trimTwosComplement(bytes);
 }
 
 function isBigMantissaZero(bytes: Uint8Array): boolean {
@@ -267,7 +235,7 @@ function trimTwosComplement(bytes: Uint8Array): Uint8Array {
   return start === 0 ? bytes : bytes.slice(start);
 }
 
-function bigMantissaNeedsCanonicalization(exponent: number, bytes: Uint8Array): boolean {
+function bigMantissaNeedsCanonicalization(bytes: Uint8Array): boolean {
   return hasRedundantSignExtension(bytes)
     || isBigMantissaZero(bytes)
     || isBigMantissaDivisibleBy10(bytes)
