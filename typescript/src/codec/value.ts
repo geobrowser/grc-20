@@ -16,6 +16,8 @@ const MAX_I32 = 2147483647;
 const MAX_BYTES_LEN = 64 * 1024 * 1024;
 const DECIMAL_EXPONENT_OUT_OF_RANGE = "DECIMAL exponent outside int32 range";
 const DECIMAL_EMPTY_BIG_MANTISSA = "DECIMAL mantissa bytes must not be empty";
+const DECIMAL_NORMALIZATION_STEP_LIMIT_EXCEEDED = "DECIMAL normalization exceeds maximum steps";
+const MAX_DECIMAL_NORMALIZATION_STEPS = 4096;
 
 /**
  * Dictionary builder for tracking property/language/unit indices.
@@ -170,6 +172,7 @@ function normalizeDecimal(
   mode: "encode" | "decode"
 ): { exponent: number; mantissa: DecimalMantissa } {
   ensureDecimalExponent(exponent, mode);
+  ensureDecimalBigMantissaLength(mantissa, mode);
 
   if (mantissa.type === "i64") {
     let value = mantissa.value;
@@ -205,10 +208,15 @@ function normalizeDecimal(
     let exp = exponent;
     const isNegative = (bytes[0] & 0x80) !== 0;
     let magnitude = twosComplementAbsBytes(bytes);
+    let steps = 0;
     while (true) {
       const { quotient, remainder } = divideUnsignedBeBy10(magnitude);
       if (remainder !== 0) {
         break;
+      }
+      steps += 1;
+      if (steps > MAX_DECIMAL_NORMALIZATION_STEPS) {
+        throw decimalNormalizationStepLimitError(mode);
       }
       magnitude = quotient;
       exp = incrementDecimalExponent(exp, mode);
@@ -247,6 +255,26 @@ function decimalEmptyBigMantissaError(mode: "encode" | "decode"): Error {
   return mode === "decode"
     ? new DecodeError("E005", DECIMAL_EMPTY_BIG_MANTISSA)
     : new Error(DECIMAL_EMPTY_BIG_MANTISSA);
+}
+
+function decimalNormalizationStepLimitError(mode: "encode" | "decode"): Error {
+  return mode === "decode"
+    ? new DecodeError("E005", DECIMAL_NORMALIZATION_STEP_LIMIT_EXCEEDED)
+    : new Error(DECIMAL_NORMALIZATION_STEP_LIMIT_EXCEEDED);
+}
+
+function ensureDecimalBigMantissaLength(
+  mantissa: DecimalMantissa,
+  mode: "encode" | "decode"
+): void {
+  if (mantissa.type === "big" && mantissa.bytes.length > MAX_BYTES_LEN) {
+    throw decimalBigMantissaLengthError(mantissa.bytes.length, mode);
+  }
+}
+
+function decimalBigMantissaLengthError(length: number, mode: "encode" | "decode"): Error {
+  const message = `decimal mantissa length ${length} exceeds maximum ${MAX_BYTES_LEN}`;
+  return mode === "decode" ? new DecodeError("E005", message) : new Error(message);
 }
 
 function readDecimalExponent(reader: Reader): number {
@@ -504,7 +532,7 @@ export function decodeValuePayload(reader: Reader, dataType: DataType): Value {
       } else if (mantissaType === 0x01) {
         const len = reader.readVarintNumber();
         if (len > MAX_BYTES_LEN) {
-          throw new DecodeError("E005", `decimal mantissa length ${len} exceeds maximum ${MAX_BYTES_LEN}`);
+          throw decimalBigMantissaLengthError(len, "decode");
         }
         const bytes = new Uint8Array(reader.readBytes(len));
         if (bytes.length === 0 || hasRedundantSignExtension(bytes)) {

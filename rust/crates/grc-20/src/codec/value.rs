@@ -24,11 +24,15 @@ use crate::util::{
 
 const DECIMAL_EXPONENT_OUT_OF_RANGE: &str = "DECIMAL exponent outside int32 range";
 const DECIMAL_EMPTY_BIG_MANTISSA: &str = "DECIMAL mantissa bytes must not be empty";
+const DECIMAL_NORMALIZATION_STEP_LIMIT_EXCEEDED: &str =
+    "DECIMAL normalization exceeds maximum steps";
+const MAX_DECIMAL_NORMALIZATION_STEPS: usize = 4096;
 
 #[derive(Clone, Copy)]
 enum DecimalNormalizeError {
     ExponentOutOfRange,
     EmptyBigMantissa,
+    StepLimitExceeded,
 }
 
 impl DecimalNormalizeError {
@@ -40,6 +44,9 @@ impl DecimalNormalizeError {
             DecimalNormalizeError::EmptyBigMantissa => DecodeError::MalformedEncoding {
                 context: DECIMAL_EMPTY_BIG_MANTISSA,
             },
+            DecimalNormalizeError::StepLimitExceeded => DecodeError::MalformedEncoding {
+                context: DECIMAL_NORMALIZATION_STEP_LIMIT_EXCEEDED,
+            },
         }
     }
 
@@ -50,6 +57,9 @@ impl DecimalNormalizeError {
             },
             DecimalNormalizeError::EmptyBigMantissa => EncodeError::InvalidInput {
                 context: DECIMAL_EMPTY_BIG_MANTISSA,
+            },
+            DecimalNormalizeError::StepLimitExceeded => EncodeError::InvalidInput {
+                context: DECIMAL_NORMALIZATION_STEP_LIMIT_EXCEEDED,
             },
         }
     }
@@ -776,11 +786,16 @@ fn normalize_decimal_owned(
             let is_negative = bytes[0] & 0x80 != 0;
             let mut magnitude = twos_complement_abs_bytes(bytes);
             let mut exp = exponent;
+            let mut steps = 0usize;
 
             loop {
                 let (quotient, remainder) = divide_unsigned_be_by_10(&magnitude);
                 if remainder != 0 {
                     break;
+                }
+                steps += 1;
+                if steps > MAX_DECIMAL_NORMALIZATION_STEPS {
+                    return Err(DecimalNormalizeError::StepLimitExceeded);
                 }
                 magnitude = quotient;
                 exp = exp
@@ -930,6 +945,16 @@ fn encode_decimal(
     exponent: i32,
     mantissa: &DecimalMantissa<'_>,
 ) -> Result<(), EncodeError> {
+    if let DecimalMantissa::Big(bytes) = mantissa {
+        if bytes.len() > MAX_BYTES_LEN {
+            return Err(EncodeError::LengthExceedsLimit {
+                field: "decimal.mantissa",
+                len: bytes.len(),
+                max: MAX_BYTES_LEN,
+            });
+        }
+    }
+
     // Normalize: strip trailing zeros from mantissa, adjust exponent, and use
     // the compact i64 wire form whenever the canonical mantissa fits in i64.
     if !decimal_needs_canonicalization(exponent, mantissa) {
@@ -1642,6 +1667,33 @@ mod tests {
         assert!(!is_big_mantissa_divisible_by_10(&[0xF9])); // -7
     }
 
+    fn multiply_unsigned_be_by_10(bytes: &[u8]) -> Vec<u8> {
+        let mut result = Vec::with_capacity(bytes.len() + 1);
+        let mut carry = 0u16;
+
+        for &byte in bytes.iter().rev() {
+            let product = byte as u16 * 10 + carry;
+            result.push((product & 0xFF) as u8);
+            carry = product >> 8;
+        }
+
+        while carry != 0 {
+            result.push((carry & 0xFF) as u8);
+            carry >>= 8;
+        }
+
+        result.reverse();
+        result
+    }
+
+    fn decimal_power_of_ten_bytes(power: usize) -> Vec<u8> {
+        let mut magnitude = vec![1u8];
+        for _ in 0..power {
+            magnitude = multiply_unsigned_be_by_10(&magnitude);
+        }
+        signed_bytes_from_magnitude(false, &magnitude)
+    }
+
     #[test]
     fn test_big_decimal_normalization_encode() {
         let dicts = WireDictionaries::default();
@@ -1955,6 +2007,72 @@ mod tests {
             err,
             EncodeError::InvalidInput {
                 context: DECIMAL_EMPTY_BIG_MANTISSA,
+            }
+        );
+    }
+
+    #[test]
+    fn test_encode_decimal_rejects_big_mantissa_length_over_limit() {
+        let mut oversized = vec![0u8; MAX_BYTES_LEN + 1];
+        oversized[0] = 1;
+        let value = Value::Decimal {
+            exponent: 0,
+            mantissa: DecimalMantissa::Big(Cow::Owned(oversized)),
+            unit: None,
+        };
+
+        let mut dict_builder = DictionaryBuilder::new();
+        let mut writer = Writer::new();
+        let err = encode_value(&mut writer, &value, &mut dict_builder).unwrap_err();
+        assert_eq!(
+            err,
+            EncodeError::LengthExceedsLimit {
+                field: "decimal.mantissa",
+                len: MAX_BYTES_LEN + 1,
+                max: MAX_BYTES_LEN,
+            }
+        );
+    }
+
+    #[test]
+    fn test_decode_decimal_rejects_excessive_normalization_steps() {
+        let dicts = WireDictionaries::default();
+        let bytes = decimal_power_of_ten_bytes(MAX_DECIMAL_NORMALIZATION_STEPS + 1);
+
+        let mut writer = Writer::new();
+        writer.write_signed_varint(0);
+        writer.write_byte(0x01);
+        writer.write_varint(bytes.len() as u64);
+        writer.write_bytes(&bytes);
+        writer.write_varint(0);
+
+        let mut reader = Reader::new(writer.as_bytes());
+        let err = decode_value(&mut reader, DataType::Decimal, &dicts).unwrap_err();
+        assert_eq!(
+            err,
+            DecodeError::MalformedEncoding {
+                context: DECIMAL_NORMALIZATION_STEP_LIMIT_EXCEEDED,
+            }
+        );
+    }
+
+    #[test]
+    fn test_encode_decimal_rejects_excessive_normalization_steps() {
+        let value = Value::Decimal {
+            exponent: 0,
+            mantissa: DecimalMantissa::Big(Cow::Owned(decimal_power_of_ten_bytes(
+                MAX_DECIMAL_NORMALIZATION_STEPS + 1,
+            ))),
+            unit: None,
+        };
+
+        let mut dict_builder = DictionaryBuilder::new();
+        let mut writer = Writer::new();
+        let err = encode_value(&mut writer, &value, &mut dict_builder).unwrap_err();
+        assert_eq!(
+            err,
+            EncodeError::InvalidInput {
+                context: DECIMAL_NORMALIZATION_STEP_LIMIT_EXCEEDED,
             }
         );
     }

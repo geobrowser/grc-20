@@ -60,6 +60,29 @@ function readObjectIds(encoded: Uint8Array): Id[] {
   return objects;
 }
 
+function positiveBigIntToMinimalTwosComplement(value: bigint): Uint8Array {
+  let hex = value.toString(16);
+  if (hex.length % 2 !== 0) {
+    hex = `0${hex}`;
+  }
+
+  const raw = new Uint8Array(hex.length / 2);
+  for (let i = 0; i < raw.length; i++) {
+    raw[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+  }
+
+  if (raw.length === 0) {
+    return new Uint8Array([0]);
+  }
+  if ((raw[0] & 0x80) === 0) {
+    return raw;
+  }
+
+  const bytes = new Uint8Array(raw.length + 1);
+  bytes.set(raw, 1);
+  return bytes;
+}
+
 describe("ID utilities", () => {
   it("formatId produces 32 hex chars", () => {
     const id = randomId();
@@ -1574,6 +1597,39 @@ describe("Codec", () => {
         exponent: 0,
         mantissa: { type: "big", bytes: new Uint8Array([]) },
       })).toThrow("DECIMAL mantissa bytes must not be empty");
+    });
+
+    it("rejects decimal big mantissas over the maximum on encode", () => {
+      const writer = new Writer();
+      const oversized = new Uint8Array(64 * 1024 * 1024 + 1);
+      oversized[0] = 1;
+
+      expect(() => encodeValuePayload(writer, {
+        type: "decimal",
+        exponent: 0,
+        mantissa: { type: "big", bytes: oversized },
+      })).toThrow("decimal mantissa length 67108865 exceeds maximum 67108864");
+    });
+
+    it("rejects excessive decimal normalization work on decode", () => {
+      const writer = new Writer();
+      const bytes = positiveBigIntToMinimalTwosComplement(10n ** 4097n);
+      writer.writeSignedVarint(0n);
+      writer.writeByte(0x01);
+      writer.writeLengthPrefixedBytes(bytes);
+
+      expect(() => decodeValuePayload(new Reader(writer.finish()), DataType.Decimal))
+        .toThrow("DECIMAL normalization exceeds maximum steps");
+    });
+
+    it("rejects excessive decimal normalization work on encode", () => {
+      const writer = new Writer();
+
+      expect(() => encodeValuePayload(writer, {
+        type: "decimal",
+        exponent: 0,
+        mantissa: { type: "big", bytes: positiveBigIntToMinimalTwosComplement(10n ** 4097n) },
+      })).toThrow("DECIMAL normalization exceeds maximum steps");
     });
 
     it("rejects exponents outside int32 range on decode", () => {
