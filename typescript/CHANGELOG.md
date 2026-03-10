@@ -1,5 +1,13 @@
 # @geoprotocol/grc-20
 
+## 0.4.1
+
+### Patch Changes
+
+- 968e4f0: Harden decimal encoding and decoding in the TypeScript codec.
+
+  Decimal values are now normalized canonically during encode and decode, with better validation for exponent bounds, empty or non-minimal big mantissas, oversized mantissa byte lengths, and decimal inputs that would require excessive normalization work.
+
 ## 0.2.3
 
 ### Patch Changes
