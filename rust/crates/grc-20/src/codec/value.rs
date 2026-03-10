@@ -6,19 +6,64 @@ use std::borrow::Cow;
 
 use crate::codec::primitives::{Reader, Writer};
 use crate::error::{DecodeError, EncodeError};
-use crate::limits::{MAX_BYTES_LEN, MAX_EMBEDDING_BYTES, MAX_EMBEDDING_DIMS, MAX_POSITION_LEN, MAX_STRING_LEN};
+use crate::limits::{
+    MAX_BYTES_LEN, MAX_EMBEDDING_BYTES, MAX_EMBEDDING_DIMS, MAX_POSITION_LEN, MAX_STRING_LEN,
+};
 use crate::model::{
     DataType, DecimalMantissa, DictionaryBuilder, EmbeddingSubType, PropertyValue, Value,
     WireDictionaries,
 };
 use crate::util::{
-    format_date_rfc3339, format_datetime_rfc3339, format_time_rfc3339,
-    parse_date_rfc3339, parse_datetime_rfc3339, parse_time_rfc3339,
+    format_date_rfc3339, format_datetime_rfc3339, format_time_rfc3339, parse_date_rfc3339,
+    parse_datetime_rfc3339, parse_time_rfc3339,
 };
 
 // =============================================================================
 // DECODING
 // =============================================================================
+
+const DECIMAL_EXPONENT_OUT_OF_RANGE: &str = "DECIMAL exponent outside int32 range";
+const DECIMAL_EMPTY_BIG_MANTISSA: &str = "DECIMAL mantissa bytes must not be empty";
+const DECIMAL_NORMALIZATION_STEP_LIMIT_EXCEEDED: &str =
+    "DECIMAL normalization exceeds maximum steps";
+const MAX_DECIMAL_NORMALIZATION_STEPS: usize = 4096;
+
+#[derive(Clone, Copy)]
+enum DecimalNormalizeError {
+    ExponentOutOfRange,
+    EmptyBigMantissa,
+    StepLimitExceeded,
+}
+
+impl DecimalNormalizeError {
+    fn into_decode_error(self) -> DecodeError {
+        match self {
+            DecimalNormalizeError::ExponentOutOfRange => DecodeError::MalformedEncoding {
+                context: DECIMAL_EXPONENT_OUT_OF_RANGE,
+            },
+            DecimalNormalizeError::EmptyBigMantissa => DecodeError::MalformedEncoding {
+                context: DECIMAL_EMPTY_BIG_MANTISSA,
+            },
+            DecimalNormalizeError::StepLimitExceeded => DecodeError::MalformedEncoding {
+                context: DECIMAL_NORMALIZATION_STEP_LIMIT_EXCEEDED,
+            },
+        }
+    }
+
+    fn into_encode_error(self) -> EncodeError {
+        match self {
+            DecimalNormalizeError::ExponentOutOfRange => EncodeError::InvalidInput {
+                context: DECIMAL_EXPONENT_OUT_OF_RANGE,
+            },
+            DecimalNormalizeError::EmptyBigMantissa => EncodeError::InvalidInput {
+                context: DECIMAL_EMPTY_BIG_MANTISSA,
+            },
+            DecimalNormalizeError::StepLimitExceeded => EncodeError::InvalidInput {
+                context: DECIMAL_NORMALIZATION_STEP_LIMIT_EXCEEDED,
+            },
+        }
+    }
+}
 
 /// Decodes a Value from the reader based on the data type (zero-copy).
 pub fn decode_value<'a>(
@@ -52,7 +97,10 @@ fn decode_boolean<'a>(reader: &mut Reader<'a>) -> Result<Value<'a>, DecodeError>
     }
 }
 
-fn decode_integer<'a>(reader: &mut Reader<'a>, dicts: &WireDictionaries) -> Result<Value<'a>, DecodeError> {
+fn decode_integer<'a>(
+    reader: &mut Reader<'a>,
+    dicts: &WireDictionaries,
+) -> Result<Value<'a>, DecodeError> {
     let value = reader.read_signed_varint("integer")?;
     let unit_index = reader.read_varint("integer.unit")? as usize;
     let unit = if unit_index == 0 {
@@ -71,7 +119,10 @@ fn decode_integer<'a>(reader: &mut Reader<'a>, dicts: &WireDictionaries) -> Resu
     Ok(Value::Integer { value, unit })
 }
 
-fn decode_float<'a>(reader: &mut Reader<'a>, dicts: &WireDictionaries) -> Result<Value<'a>, DecodeError> {
+fn decode_float<'a>(
+    reader: &mut Reader<'a>,
+    dicts: &WireDictionaries,
+) -> Result<Value<'a>, DecodeError> {
     let value = reader.read_f64("float")?;
     let unit_index = reader.read_varint("float.unit")? as usize;
     let unit = if unit_index == 0 {
@@ -90,8 +141,14 @@ fn decode_float<'a>(reader: &mut Reader<'a>, dicts: &WireDictionaries) -> Result
     Ok(Value::Float { value, unit })
 }
 
-fn decode_decimal<'a>(reader: &mut Reader<'a>, dicts: &WireDictionaries) -> Result<Value<'a>, DecodeError> {
-    let exponent = reader.read_signed_varint("decimal.exponent")? as i32;
+fn decode_decimal<'a>(
+    reader: &mut Reader<'a>,
+    dicts: &WireDictionaries,
+) -> Result<Value<'a>, DecodeError> {
+    let exponent = i32::try_from(reader.read_signed_varint("decimal.exponent")?)
+        .map_err(|_| DecodeError::MalformedEncoding {
+            context: DECIMAL_EXPONENT_OUT_OF_RANGE,
+        })?;
     let mantissa_type = reader.read_byte("decimal.mantissa_type")?;
 
     let mantissa = match mantissa_type {
@@ -101,18 +158,28 @@ fn decode_decimal<'a>(reader: &mut Reader<'a>, dicts: &WireDictionaries) -> Resu
         }
         0x01 => {
             let len = reader.read_varint("decimal.mantissa_len")? as usize;
+            if len > MAX_BYTES_LEN {
+                return Err(DecodeError::LengthExceedsLimit {
+                    field: "decimal.mantissa",
+                    len,
+                    max: MAX_BYTES_LEN,
+                });
+            }
             let bytes = reader.read_bytes(len, "decimal.mantissa_bytes")?;
 
+            if bytes.is_empty() {
+                return Err(DecodeError::DecimalMantissaNotMinimal);
+            }
+
             // Validate minimal encoding
-            if !bytes.is_empty() {
-                let first = bytes[0];
-                // Check for redundant sign extension
-                if bytes.len() > 1 {
-                    let second = bytes[1];
-                    if (first == 0x00 && (second & 0x80) == 0)
-                        || (first == 0xFF && (second & 0x80) != 0) {
-                        return Err(DecodeError::DecimalMantissaNotMinimal);
-                    }
+            let first = bytes[0];
+            // Check for redundant sign extension
+            if bytes.len() > 1 {
+                let second = bytes[1];
+                if (first == 0x00 && (second & 0x80) == 0)
+                    || (first == 0xFF && (second & 0x80) != 0)
+                {
+                    return Err(DecodeError::DecimalMantissaNotMinimal);
                 }
             }
 
@@ -120,32 +187,14 @@ fn decode_decimal<'a>(reader: &mut Reader<'a>, dicts: &WireDictionaries) -> Resu
         }
         _ => {
             return Err(DecodeError::MalformedEncoding {
-                context: "invalid decimal mantissa type"
+                context: "invalid decimal mantissa type",
             });
         }
     };
 
-    // Validate normalization
-    match &mantissa {
-        DecimalMantissa::I64(v) => {
-            if *v == 0 {
-                if exponent != 0 {
-                    return Err(DecodeError::DecimalNotNormalized);
-                }
-            } else if *v % 10 == 0 {
-                return Err(DecodeError::DecimalNotNormalized);
-            }
-        }
-        DecimalMantissa::Big(bytes) => {
-            if is_big_mantissa_zero(bytes) {
-                if exponent != 0 {
-                    return Err(DecodeError::DecimalNotNormalized);
-                }
-            } else if is_big_mantissa_divisible_by_10(bytes) {
-                return Err(DecodeError::DecimalNotNormalized);
-            }
-        }
-    }
+    // Normalize on read to handle already-published edits with non-normalized
+    // decimals, while preserving borrowed bytes for canonical big mantissas.
+    let (exponent, mantissa) = normalize_decimal_for_decode(exponent, mantissa)?;
 
     let unit_index = reader.read_varint("decimal.unit")? as usize;
     let unit = if unit_index == 0 {
@@ -162,12 +211,22 @@ fn decode_decimal<'a>(reader: &mut Reader<'a>, dicts: &WireDictionaries) -> Resu
         Some(dicts.units[idx])
     };
 
-    Ok(Value::Decimal { exponent, mantissa, unit })
+    Ok(Value::Decimal {
+        exponent,
+        mantissa,
+        unit,
+    })
 }
 
 /// Checks if a big-endian two's complement mantissa represents zero.
 fn is_big_mantissa_zero(bytes: &[u8]) -> bool {
-    bytes.iter().all(|&b| b == 0)
+    !bytes.is_empty() && bytes.iter().all(|&b| b == 0)
+}
+
+fn has_redundant_sign_extension(bytes: &[u8]) -> bool {
+    bytes.len() > 1
+        && ((bytes[0] == 0x00 && (bytes[1] & 0x80) == 0)
+            || (bytes[0] == 0xFF && (bytes[1] & 0x80) != 0))
 }
 
 /// Checks if a big-endian two's complement mantissa is divisible by 10.
@@ -224,7 +283,10 @@ fn twos_complement_abs_mod_10(bytes: &[u8]) -> u32 {
     (remainder + 1) % 10
 }
 
-fn decode_text<'a>(reader: &mut Reader<'a>, dicts: &WireDictionaries) -> Result<Value<'a>, DecodeError> {
+fn decode_text<'a>(
+    reader: &mut Reader<'a>,
+    dicts: &WireDictionaries,
+) -> Result<Value<'a>, DecodeError> {
     let value = reader.read_str(MAX_STRING_LEN, "text")?;
     let lang_index = reader.read_varint("text.language")? as usize;
 
@@ -242,7 +304,10 @@ fn decode_text<'a>(reader: &mut Reader<'a>, dicts: &WireDictionaries) -> Result<
         Some(dicts.languages[idx])
     };
 
-    Ok(Value::Text { value: Cow::Borrowed(value), language })
+    Ok(Value::Text {
+        value: Cow::Borrowed(value),
+        language,
+    })
 }
 
 fn decode_bytes<'a>(reader: &mut Reader<'a>) -> Result<Value<'a>, DecodeError> {
@@ -282,7 +347,7 @@ fn decode_time<'a>(reader: &mut Reader<'a>) -> Result<Value<'a>, DecodeError> {
 
     // Read int48 as 6 bytes, sign-extend to i64
     let time_micros_unsigned = u64::from_le_bytes([
-        bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], 0, 0
+        bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], 0, 0,
     ]);
     // Sign-extend from 48 bits
     let time_micros = if time_micros_unsigned & 0x8000_0000_0000 != 0 {
@@ -316,8 +381,7 @@ fn decode_datetime<'a>(reader: &mut Reader<'a>) -> Result<Value<'a>, DecodeError
     // DATETIME: 10 bytes (int64 epoch_micros + int16 offset_min), little-endian
     let bytes = reader.read_bytes(10, "datetime")?;
     let epoch_micros = i64::from_le_bytes([
-        bytes[0], bytes[1], bytes[2], bytes[3],
-        bytes[4], bytes[5], bytes[6], bytes[7]
+        bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
     ]);
     let offset_min = i16::from_le_bytes([bytes[8], bytes[9]]);
 
@@ -387,22 +451,41 @@ fn decode_rect<'a>(reader: &mut Reader<'a>) -> Result<Value<'a>, DecodeError> {
 
     // Validate bounds
     if !(-90.0..=90.0).contains(&min_lat) || !(-90.0..=90.0).contains(&max_lat) {
-        return Err(DecodeError::LatitudeOutOfRange { lat: if !(-90.0..=90.0).contains(&min_lat) { min_lat } else { max_lat } });
+        return Err(DecodeError::LatitudeOutOfRange {
+            lat: if !(-90.0..=90.0).contains(&min_lat) {
+                min_lat
+            } else {
+                max_lat
+            },
+        });
     }
     if !(-180.0..=180.0).contains(&min_lon) || !(-180.0..=180.0).contains(&max_lon) {
-        return Err(DecodeError::LongitudeOutOfRange { lon: if !(-180.0..=180.0).contains(&min_lon) { min_lon } else { max_lon } });
+        return Err(DecodeError::LongitudeOutOfRange {
+            lon: if !(-180.0..=180.0).contains(&min_lon) {
+                min_lon
+            } else {
+                max_lon
+            },
+        });
     }
     if min_lat.is_nan() || min_lon.is_nan() || max_lat.is_nan() || max_lon.is_nan() {
         return Err(DecodeError::FloatIsNan);
     }
 
-    Ok(Value::Rect { min_lat, min_lon, max_lat, max_lon })
+    Ok(Value::Rect {
+        min_lat,
+        min_lon,
+        max_lat,
+        max_lon,
+    })
 }
 
 fn decode_embedding<'a>(reader: &mut Reader<'a>) -> Result<Value<'a>, DecodeError> {
     let sub_type_byte = reader.read_byte("embedding.sub_type")?;
-    let sub_type = EmbeddingSubType::from_u8(sub_type_byte)
-        .ok_or(DecodeError::InvalidEmbeddingSubType { sub_type: sub_type_byte })?;
+    let sub_type =
+        EmbeddingSubType::from_u8(sub_type_byte).ok_or(DecodeError::InvalidEmbeddingSubType {
+            sub_type: sub_type_byte,
+        })?;
 
     let dims = reader.read_varint("embedding.dims")? as usize;
     if dims > MAX_EMBEDDING_DIMS {
@@ -446,7 +529,11 @@ fn decode_embedding<'a>(reader: &mut Reader<'a>) -> Result<Value<'a>, DecodeErro
         }
     }
 
-    Ok(Value::Embedding { sub_type, dims, data: Cow::Borrowed(data) })
+    Ok(Value::Embedding {
+        sub_type,
+        dims,
+        data: Cow::Borrowed(data),
+    })
 }
 
 /// Decodes a PropertyValue (property index + value + optional language).
@@ -496,7 +583,11 @@ pub fn encode_value(
             let unit_index = dict_builder.add_unit(*unit);
             writer.write_varint(unit_index as u64);
         }
-        Value::Decimal { exponent, mantissa, unit } => {
+        Value::Decimal {
+            exponent,
+            mantissa,
+            unit,
+        } => {
             encode_decimal(writer, *exponent, mantissa)?;
             let unit_index = dict_builder.add_unit(*unit);
             writer.write_varint(unit_index as u64);
@@ -511,18 +602,20 @@ pub fn encode_value(
         }
         Value::Date(s) => {
             // Parse RFC 3339 date string
-            let (days, offset_min) = parse_date_rfc3339(s).map_err(|_| EncodeError::InvalidInput {
-                context: "Invalid RFC 3339 date format",
-            })?;
+            let (days, offset_min) =
+                parse_date_rfc3339(s).map_err(|_| EncodeError::InvalidInput {
+                    context: "Invalid RFC 3339 date format",
+                })?;
             // DATE: 6 bytes (int32 days + int16 offset_min), little-endian
             writer.write_bytes(&days.to_le_bytes());
             writer.write_bytes(&offset_min.to_le_bytes());
         }
         Value::Time(s) => {
             // Parse RFC 3339 time string
-            let (time_micros, offset_min) = parse_time_rfc3339(s).map_err(|_| EncodeError::InvalidInput {
-                context: "Invalid RFC 3339 time format",
-            })?;
+            let (time_micros, offset_min) =
+                parse_time_rfc3339(s).map_err(|_| EncodeError::InvalidInput {
+                    context: "Invalid RFC 3339 time format",
+                })?;
             // Validate time_micros range (should already be validated by parser)
             if time_micros < 0 || time_micros > 86_399_999_999 {
                 return Err(EncodeError::InvalidInput {
@@ -537,9 +630,10 @@ pub fn encode_value(
         }
         Value::Datetime(s) => {
             // Parse RFC 3339 datetime string
-            let (epoch_micros, offset_min) = parse_datetime_rfc3339(s).map_err(|_| EncodeError::InvalidInput {
-                context: "Invalid RFC 3339 datetime format",
-            })?;
+            let (epoch_micros, offset_min) =
+                parse_datetime_rfc3339(s).map_err(|_| EncodeError::InvalidInput {
+                    context: "Invalid RFC 3339 datetime format",
+                })?;
             // DATETIME: 10 bytes (int64 epoch_micros + int16 offset_min), little-endian
             writer.write_bytes(&epoch_micros.to_le_bytes());
             writer.write_bytes(&offset_min.to_le_bytes());
@@ -573,12 +667,29 @@ pub fn encode_value(
                 writer.write_f64(*a);
             }
         }
-        Value::Rect { min_lat, min_lon, max_lat, max_lon } => {
+        Value::Rect {
+            min_lat,
+            min_lon,
+            max_lat,
+            max_lon,
+        } => {
             if *min_lat < -90.0 || *min_lat > 90.0 || *max_lat < -90.0 || *max_lat > 90.0 {
-                return Err(EncodeError::LatitudeOutOfRange { lat: if *min_lat < -90.0 || *min_lat > 90.0 { *min_lat } else { *max_lat } });
+                return Err(EncodeError::LatitudeOutOfRange {
+                    lat: if *min_lat < -90.0 || *min_lat > 90.0 {
+                        *min_lat
+                    } else {
+                        *max_lat
+                    },
+                });
             }
             if *min_lon < -180.0 || *min_lon > 180.0 || *max_lon < -180.0 || *max_lon > 180.0 {
-                return Err(EncodeError::LongitudeOutOfRange { lon: if *min_lon < -180.0 || *min_lon > 180.0 { *min_lon } else { *max_lon } });
+                return Err(EncodeError::LongitudeOutOfRange {
+                    lon: if *min_lon < -180.0 || *min_lon > 180.0 {
+                        *min_lon
+                    } else {
+                        *max_lon
+                    },
+                });
             }
             if min_lat.is_nan() || min_lon.is_nan() || max_lat.is_nan() || max_lon.is_nan() {
                 return Err(EncodeError::FloatIsNan);
@@ -590,7 +701,11 @@ pub fn encode_value(
             writer.write_f64(*max_lat);
             writer.write_f64(*max_lon);
         }
-        Value::Embedding { sub_type, dims, data } => {
+        Value::Embedding {
+            sub_type,
+            dims,
+            data,
+        } => {
             let expected = sub_type.bytes_for_dims(*dims);
             if data.len() != expected {
                 return Err(EncodeError::EmbeddingDimensionMismatch {
@@ -616,44 +731,261 @@ pub fn encode_value(
     Ok(())
 }
 
+/// Returns whether the mantissa must be canonicalized to satisfy the
+/// normalization rules or the preferred wire representation.
+///
+/// This is true when:
+/// - zero is not encoded as `I64(0)` with exponent 0
+/// - the mantissa still has trailing decimal zeros
+/// - a big mantissa now fits in `i64` and should use the compact varint form
+fn decimal_needs_canonicalization(exponent: i32, mantissa: &DecimalMantissa<'_>) -> bool {
+    match mantissa {
+        DecimalMantissa::I64(v) => (*v == 0 && exponent != 0) || (*v != 0 && *v % 10 == 0),
+        DecimalMantissa::Big(bytes) => {
+            has_redundant_sign_extension(bytes)
+                || is_big_mantissa_zero(bytes)
+                || is_big_mantissa_divisible_by_10(bytes)
+                || twos_complement_bytes_to_i64(bytes).is_some()
+        }
+    }
+}
+
+/// Normalizes a decimal by stripping trailing zeros from the mantissa and
+/// adjusting the exponent. Returns an owned canonical representation.
+fn normalize_decimal_owned(
+    exponent: i32,
+    mantissa: &DecimalMantissa<'_>,
+) -> Result<(i32, DecimalMantissa<'static>), DecimalNormalizeError> {
+    match mantissa {
+        DecimalMantissa::I64(v) => {
+            let mut value = *v;
+            let mut exp = exponent;
+
+            if value == 0 {
+                return Ok((0, DecimalMantissa::I64(0)));
+            }
+
+            while value != 0 && value % 10 == 0 {
+                value /= 10;
+                exp = exp
+                    .checked_add(1)
+                    .ok_or(DecimalNormalizeError::ExponentOutOfRange)?;
+            }
+
+            Ok((exp, DecimalMantissa::I64(value)))
+        }
+        DecimalMantissa::Big(bytes) => {
+            if bytes.is_empty() {
+                return Err(DecimalNormalizeError::EmptyBigMantissa);
+            }
+
+            if is_big_mantissa_zero(bytes) {
+                return Ok((0, DecimalMantissa::I64(0)));
+            }
+
+            let is_negative = bytes[0] & 0x80 != 0;
+            let mut magnitude = twos_complement_abs_bytes(bytes);
+            let mut exp = exponent;
+            let mut steps = 0usize;
+
+            loop {
+                let (quotient, remainder) = divide_unsigned_be_by_10(&magnitude);
+                if remainder != 0 {
+                    break;
+                }
+                steps += 1;
+                if steps > MAX_DECIMAL_NORMALIZATION_STEPS {
+                    return Err(DecimalNormalizeError::StepLimitExceeded);
+                }
+                magnitude = quotient;
+                exp = exp
+                    .checked_add(1)
+                    .ok_or(DecimalNormalizeError::ExponentOutOfRange)?;
+            }
+
+            let canonical_bytes = signed_bytes_from_magnitude(is_negative, &magnitude);
+            if let Some(value) = twos_complement_bytes_to_i64(&canonical_bytes) {
+                Ok((exp, DecimalMantissa::I64(value)))
+            } else {
+                Ok((exp, DecimalMantissa::Big(Cow::Owned(canonical_bytes))))
+            }
+        }
+    }
+}
+
+fn normalize_decimal_for_decode<'a>(
+    exponent: i32,
+    mantissa: DecimalMantissa<'a>,
+) -> Result<(i32, DecimalMantissa<'a>), DecodeError> {
+    if !decimal_needs_canonicalization(exponent, &mantissa) {
+        return Ok((exponent, mantissa));
+    }
+
+    let (exp, canonical) = normalize_decimal_owned(exponent, &mantissa)
+        .map_err(DecimalNormalizeError::into_decode_error)?;
+    match canonical {
+        DecimalMantissa::I64(value) => Ok((exp, DecimalMantissa::I64(value))),
+        DecimalMantissa::Big(bytes) => {
+            Ok((exp, DecimalMantissa::Big(Cow::Owned(bytes.into_owned()))))
+        }
+    }
+}
+
+fn twos_complement_abs_bytes(bytes: &[u8]) -> Vec<u8> {
+    if bytes.is_empty() {
+        return Vec::new();
+    }
+
+    if bytes[0] & 0x80 == 0 {
+        let first_non_zero = bytes
+            .iter()
+            .position(|&byte| byte != 0)
+            .unwrap_or(bytes.len());
+        return bytes[first_non_zero..].to_vec();
+    }
+
+    let mut magnitude = vec![0u8; bytes.len()];
+    let mut carry = 1u16;
+    for (index, &byte) in bytes.iter().enumerate().rev() {
+        let sum = (!byte as u16) + carry;
+        magnitude[index] = sum as u8;
+        carry = sum >> 8;
+    }
+
+    let first_non_zero = magnitude
+        .iter()
+        .position(|&byte| byte != 0)
+        .unwrap_or(magnitude.len());
+    magnitude[first_non_zero..].to_vec()
+}
+
+fn divide_unsigned_be_by_10(bytes: &[u8]) -> (Vec<u8>, u8) {
+    let mut quotient = Vec::with_capacity(bytes.len());
+    let mut remainder = 0u16;
+
+    for &byte in bytes {
+        let current = (remainder << 8) | byte as u16;
+        quotient.push((current / 10) as u8);
+        remainder = current % 10;
+    }
+
+    let first_non_zero = quotient
+        .iter()
+        .position(|&byte| byte != 0)
+        .unwrap_or(quotient.len());
+    (quotient[first_non_zero..].to_vec(), remainder as u8)
+}
+
+fn signed_bytes_from_magnitude(is_negative: bool, magnitude: &[u8]) -> Vec<u8> {
+    if magnitude.is_empty() {
+        return vec![0];
+    }
+
+    let first_non_zero = magnitude
+        .iter()
+        .position(|&byte| byte != 0)
+        .unwrap_or(magnitude.len());
+    let magnitude = &magnitude[first_non_zero..];
+    if magnitude.is_empty() {
+        return vec![0];
+    }
+
+    if !is_negative {
+        let mut bytes = magnitude.to_vec();
+        if bytes[0] & 0x80 != 0 {
+            bytes.insert(0, 0x00);
+        }
+        return bytes;
+    }
+
+    let fits_in_current_width = magnitude[0] < 0x80
+        || (magnitude[0] == 0x80 && magnitude[1..].iter().all(|&byte| byte == 0));
+    let width = if fits_in_current_width {
+        magnitude.len()
+    } else {
+        magnitude.len() + 1
+    };
+
+    let mut bytes = vec![0u8; width];
+    bytes[width - magnitude.len()..].copy_from_slice(magnitude);
+    for byte in &mut bytes {
+        *byte = !*byte;
+    }
+
+    let mut carry = 1u16;
+    for byte in bytes.iter_mut().rev() {
+        let sum = *byte as u16 + carry;
+        *byte = sum as u8;
+        carry = sum >> 8;
+    }
+
+    while bytes.len() > 1 && bytes[0] == 0xFF && (bytes[1] & 0x80) != 0 {
+        bytes.remove(0);
+    }
+
+    bytes
+}
+
+fn twos_complement_bytes_to_i64(bytes: &[u8]) -> Option<i64> {
+    if bytes.is_empty() {
+        return Some(0);
+    }
+    if bytes.len() > 8 {
+        return None;
+    }
+
+    let fill = if bytes[0] & 0x80 != 0 { 0xFF } else { 0x00 };
+    let mut expanded = [fill; 8];
+    expanded[8 - bytes.len()..].copy_from_slice(bytes);
+    Some(i64::from_be_bytes(expanded))
+}
+
 fn encode_decimal(
     writer: &mut Writer,
     exponent: i32,
     mantissa: &DecimalMantissa<'_>,
 ) -> Result<(), EncodeError> {
-    // Validate normalization
-    match mantissa {
-        DecimalMantissa::I64(v) => {
-            if *v == 0 {
-                if exponent != 0 {
-                    return Err(EncodeError::DecimalNotNormalized);
-                }
-            } else if *v % 10 == 0 {
-                return Err(EncodeError::DecimalNotNormalized);
-            }
-        }
-        DecimalMantissa::Big(bytes) => {
-            if is_big_mantissa_zero(bytes) {
-                if exponent != 0 {
-                    return Err(EncodeError::DecimalNotNormalized);
-                }
-            } else if is_big_mantissa_divisible_by_10(bytes) {
-                return Err(EncodeError::DecimalNotNormalized);
-            }
+    if let DecimalMantissa::Big(bytes) = mantissa {
+        if bytes.len() > MAX_BYTES_LEN {
+            return Err(EncodeError::LengthExceedsLimit {
+                field: "decimal.mantissa",
+                len: bytes.len(),
+                max: MAX_BYTES_LEN,
+            });
         }
     }
 
-    writer.write_signed_varint(exponent as i64);
+    // Normalize: strip trailing zeros from mantissa, adjust exponent, and use
+    // the compact i64 wire form whenever the canonical mantissa fits in i64.
+    if !decimal_needs_canonicalization(exponent, mantissa) {
+        writer.write_signed_varint(exponent as i64);
+        match mantissa {
+            DecimalMantissa::I64(value) => {
+                writer.write_byte(0x00);
+                writer.write_signed_varint(*value);
+            }
+            DecimalMantissa::Big(bytes) => {
+                writer.write_byte(0x01);
+                writer.write_varint(bytes.len() as u64);
+                writer.write_bytes(bytes);
+            }
+        }
+        return Ok(());
+    }
 
-    match mantissa {
-        DecimalMantissa::I64(v) => {
+    let (norm_exp, norm_mantissa) =
+        normalize_decimal_owned(exponent, mantissa).map_err(DecimalNormalizeError::into_encode_error)?;
+    writer.write_signed_varint(norm_exp as i64);
+
+    match norm_mantissa {
+        DecimalMantissa::I64(value) => {
             writer.write_byte(0x00);
-            writer.write_signed_varint(*v);
+            writer.write_signed_varint(value);
         }
         DecimalMantissa::Big(bytes) => {
             writer.write_byte(0x01);
             writer.write_varint(bytes.len() as u64);
-            writer.write_bytes(bytes);
+            writer.write_bytes(bytes.as_ref());
         }
     }
 
@@ -721,7 +1053,10 @@ mod tests {
     #[test]
     fn test_integer_roundtrip() {
         for v in [0i64, 1, -1, i64::MAX, i64::MIN, 12345678] {
-            let value = Value::Integer { value: v, unit: None };
+            let value = Value::Integer {
+                value: v,
+                unit: None,
+            };
             let mut dict_builder = DictionaryBuilder::new();
 
             let mut writer = Writer::new();
@@ -738,7 +1073,10 @@ mod tests {
     #[test]
     fn test_float_roundtrip() {
         for v in [0.0, 1.0, -1.0, f64::INFINITY, f64::NEG_INFINITY, 3.14159] {
-            let value = Value::Float { value: v, unit: None };
+            let value = Value::Float {
+                value: v,
+                unit: None,
+            };
             let mut dict_builder = DictionaryBuilder::new();
 
             let mut writer = Writer::new();
@@ -771,7 +1109,16 @@ mod tests {
 
         // Compare inner values since one is Owned and one is Borrowed
         match (&value, &decoded) {
-            (Value::Text { value: v1, language: l1 }, Value::Text { value: v2, language: l2 }) => {
+            (
+                Value::Text {
+                    value: v1,
+                    language: l1,
+                },
+                Value::Text {
+                    value: v2,
+                    language: l2,
+                },
+            ) => {
                 assert_eq!(v1.as_ref(), v2.as_ref());
                 assert_eq!(l1, l2);
             }
@@ -782,7 +1129,11 @@ mod tests {
     #[test]
     fn test_point_roundtrip() {
         // 2D point (no altitude)
-        let value = Value::Point { lat: 37.7749, lon: -122.4194, alt: None };
+        let value = Value::Point {
+            lat: 37.7749,
+            lon: -122.4194,
+            alt: None,
+        };
         let dicts = WireDictionaries::default();
         let mut dict_builder = DictionaryBuilder::new();
 
@@ -795,7 +1146,11 @@ mod tests {
         assert_eq!(value, decoded);
 
         // 3D point (with altitude)
-        let value_3d = Value::Point { lat: 37.7749, lon: -122.4194, alt: Some(100.0) };
+        let value_3d = Value::Point {
+            lat: 37.7749,
+            lon: -122.4194,
+            alt: Some(100.0),
+        };
         let mut dict_builder = DictionaryBuilder::new();
 
         let mut writer = Writer::new();
@@ -810,21 +1165,33 @@ mod tests {
     #[test]
     fn test_point_validation() {
         // Latitude out of range
-        let value = Value::Point { lat: 91.0, lon: 0.0, alt: None };
+        let value = Value::Point {
+            lat: 91.0,
+            lon: 0.0,
+            alt: None,
+        };
         let mut dict_builder = DictionaryBuilder::new();
         let mut writer = Writer::new();
         let result = encode_value(&mut writer, &value, &mut dict_builder);
         assert!(result.is_err());
 
         // Longitude out of range
-        let value = Value::Point { lat: 0.0, lon: 181.0, alt: None };
+        let value = Value::Point {
+            lat: 0.0,
+            lon: 181.0,
+            alt: None,
+        };
         let mut dict_builder = DictionaryBuilder::new();
         let mut writer = Writer::new();
         let result = encode_value(&mut writer, &value, &mut dict_builder);
         assert!(result.is_err());
 
         // NaN in altitude
-        let value = Value::Point { lat: 0.0, lon: 0.0, alt: Some(f64::NAN) };
+        let value = Value::Point {
+            lat: 0.0,
+            lon: 0.0,
+            alt: Some(f64::NAN),
+        };
         let mut dict_builder = DictionaryBuilder::new();
         let mut writer = Writer::new();
         let result = encode_value(&mut writer, &value, &mut dict_builder);
@@ -854,33 +1221,58 @@ mod tests {
     #[test]
     fn test_rect_validation() {
         // Latitude out of range
-        let value = Value::Rect { min_lat: -91.0, min_lon: 0.0, max_lat: 0.0, max_lon: 0.0 };
+        let value = Value::Rect {
+            min_lat: -91.0,
+            min_lon: 0.0,
+            max_lat: 0.0,
+            max_lon: 0.0,
+        };
         let mut dict_builder = DictionaryBuilder::new();
         let mut writer = Writer::new();
         let result = encode_value(&mut writer, &value, &mut dict_builder);
         assert!(result.is_err());
 
-        let value = Value::Rect { min_lat: 0.0, min_lon: 0.0, max_lat: 91.0, max_lon: 0.0 };
+        let value = Value::Rect {
+            min_lat: 0.0,
+            min_lon: 0.0,
+            max_lat: 91.0,
+            max_lon: 0.0,
+        };
         let mut dict_builder = DictionaryBuilder::new();
         let mut writer = Writer::new();
         let result = encode_value(&mut writer, &value, &mut dict_builder);
         assert!(result.is_err());
 
         // Longitude out of range
-        let value = Value::Rect { min_lat: 0.0, min_lon: -181.0, max_lat: 0.0, max_lon: 0.0 };
+        let value = Value::Rect {
+            min_lat: 0.0,
+            min_lon: -181.0,
+            max_lat: 0.0,
+            max_lon: 0.0,
+        };
         let mut dict_builder = DictionaryBuilder::new();
         let mut writer = Writer::new();
         let result = encode_value(&mut writer, &value, &mut dict_builder);
         assert!(result.is_err());
 
-        let value = Value::Rect { min_lat: 0.0, min_lon: 0.0, max_lat: 0.0, max_lon: 181.0 };
+        let value = Value::Rect {
+            min_lat: 0.0,
+            min_lon: 0.0,
+            max_lat: 0.0,
+            max_lon: 181.0,
+        };
         let mut dict_builder = DictionaryBuilder::new();
         let mut writer = Writer::new();
         let result = encode_value(&mut writer, &value, &mut dict_builder);
         assert!(result.is_err());
 
         // NaN not allowed
-        let value = Value::Rect { min_lat: f64::NAN, min_lon: 0.0, max_lat: 0.0, max_lon: 0.0 };
+        let value = Value::Rect {
+            min_lat: f64::NAN,
+            min_lon: 0.0,
+            max_lat: 0.0,
+            max_lon: 0.0,
+        };
         let mut dict_builder = DictionaryBuilder::new();
         let mut writer = Writer::new();
         let result = encode_value(&mut writer, &value, &mut dict_builder);
@@ -893,7 +1285,10 @@ mod tests {
         let mut dict_builder = DictionaryBuilder::new();
 
         // Simple iCalendar event (single occurrence)
-        let value = Value::Schedule(Cow::Owned("BEGIN:VEVENT\r\nDTSTART:20240315T090000Z\r\nDTEND:20240315T100000Z\r\nEND:VEVENT".to_string()));
+        let value = Value::Schedule(Cow::Owned(
+            "BEGIN:VEVENT\r\nDTSTART:20240315T090000Z\r\nDTEND:20240315T100000Z\r\nEND:VEVENT"
+                .to_string(),
+        ));
 
         let mut writer = Writer::new();
         encode_value(&mut writer, &value, &mut dict_builder).unwrap();
@@ -928,8 +1323,16 @@ mod tests {
         // Compare inner values since one is Owned and one is Borrowed
         match (&value, &decoded) {
             (
-                Value::Embedding { sub_type: s1, dims: d1, data: data1 },
-                Value::Embedding { sub_type: s2, dims: d2, data: data2 },
+                Value::Embedding {
+                    sub_type: s1,
+                    dims: d1,
+                    data: data1,
+                },
+                Value::Embedding {
+                    sub_type: s2,
+                    dims: d2,
+                    data: data2,
+                },
             ) => {
                 assert_eq!(s1, s2);
                 assert_eq!(d1, d2);
@@ -941,7 +1344,9 @@ mod tests {
 
     #[test]
     fn test_decimal_normalized() {
-        // Valid: 12.34 = 1234 * 10^-2
+        let dicts = WireDictionaries::default();
+
+        // Valid: 12.34 = 1234 * 10^-2 (already normalized)
         let valid = Value::Decimal {
             exponent: -2,
             mantissa: DecimalMantissa::I64(1234),
@@ -950,16 +1355,117 @@ mod tests {
         let mut dict_builder = DictionaryBuilder::new();
         let mut writer = Writer::new();
         assert!(encode_value(&mut writer, &valid, &mut dict_builder).is_ok());
+        let mut reader = Reader::new(writer.as_bytes());
+        let decoded = decode_value(&mut reader, DataType::Decimal, &dicts).unwrap();
+        match decoded {
+            Value::Decimal {
+                exponent, mantissa, ..
+            } => {
+                assert_eq!(exponent, -2);
+                assert_eq!(mantissa, DecimalMantissa::I64(1234));
+            }
+            _ => panic!("expected Decimal"),
+        }
 
-        // Invalid: has trailing zeros
-        let invalid = Value::Decimal {
+        // Previously invalid (trailing zeros) — now normalized by encoder
+        let trailing = Value::Decimal {
             exponent: -2,
             mantissa: DecimalMantissa::I64(1230),
             unit: None,
         };
         let mut dict_builder = DictionaryBuilder::new();
         let mut writer = Writer::new();
-        assert!(encode_value(&mut writer, &invalid, &mut dict_builder).is_err());
+        assert!(encode_value(&mut writer, &trailing, &mut dict_builder).is_ok());
+        let mut reader = Reader::new(writer.as_bytes());
+        let decoded = decode_value(&mut reader, DataType::Decimal, &dicts).unwrap();
+        match decoded {
+            Value::Decimal {
+                exponent, mantissa, ..
+            } => {
+                // 1230 * 10^-2 = 123 * 10^-1
+                assert_eq!(exponent, -1);
+                assert_eq!(mantissa, DecimalMantissa::I64(123));
+            }
+            _ => panic!("expected Decimal"),
+        }
+    }
+
+    #[test]
+    fn test_decimal_normalize_zero() {
+        let dicts = WireDictionaries::default();
+
+        // Zero with non-zero exponent → normalized to (0, 0)
+        let zero = Value::Decimal {
+            exponent: 5,
+            mantissa: DecimalMantissa::I64(0),
+            unit: None,
+        };
+        let mut dict_builder = DictionaryBuilder::new();
+        let mut writer = Writer::new();
+        assert!(encode_value(&mut writer, &zero, &mut dict_builder).is_ok());
+        let mut reader = Reader::new(writer.as_bytes());
+        let decoded = decode_value(&mut reader, DataType::Decimal, &dicts).unwrap();
+        match decoded {
+            Value::Decimal {
+                exponent, mantissa, ..
+            } => {
+                assert_eq!(exponent, 0);
+                assert_eq!(mantissa, DecimalMantissa::I64(0));
+            }
+            _ => panic!("expected Decimal"),
+        }
+    }
+
+    #[test]
+    fn test_decimal_normalize_100_exp_neg2() {
+        let dicts = WireDictionaries::default();
+
+        // $1.00 = 100 * 10^-2 → normalized to 1 * 10^0
+        let dollar = Value::Decimal {
+            exponent: -2,
+            mantissa: DecimalMantissa::I64(100),
+            unit: None,
+        };
+        let mut dict_builder = DictionaryBuilder::new();
+        let mut writer = Writer::new();
+        assert!(encode_value(&mut writer, &dollar, &mut dict_builder).is_ok());
+        let mut reader = Reader::new(writer.as_bytes());
+        let decoded = decode_value(&mut reader, DataType::Decimal, &dicts).unwrap();
+        match decoded {
+            Value::Decimal {
+                exponent, mantissa, ..
+            } => {
+                assert_eq!(exponent, 0);
+                assert_eq!(mantissa, DecimalMantissa::I64(1));
+            }
+            _ => panic!("expected Decimal"),
+        }
+    }
+
+    #[test]
+    fn test_decimal_normalize_negative() {
+        let dicts = WireDictionaries::default();
+
+        // -500 * 10^0 → -5 * 10^2
+        let neg = Value::Decimal {
+            exponent: 0,
+            mantissa: DecimalMantissa::I64(-500),
+            unit: None,
+        };
+        let mut dict_builder = DictionaryBuilder::new();
+        let mut writer = Writer::new();
+        assert!(encode_value(&mut writer, &neg, &mut dict_builder).is_ok());
+        let mut reader = Reader::new(writer.as_bytes());
+        let decoded = decode_value(&mut reader, DataType::Decimal, &dicts).unwrap();
+        match decoded {
+            Value::Decimal {
+                exponent, mantissa, ..
+            } => {
+                assert_eq!(exponent, 2);
+                assert_eq!(mantissa, DecimalMantissa::I64(-5));
+            }
+            _ => panic!("expected Decimal"),
+        }
     }
 
     #[test]
@@ -969,10 +1475,10 @@ mod tests {
 
         // Test various date values (RFC 3339 format)
         let test_cases = [
-            "1970-01-01Z",        // Unix epoch, UTC
-            "2024-03-15Z",        // March 15, 2024 UTC
-            "2024-03-15+05:30",   // March 15, 2024 +05:30
-            "2024-03-15-08:00",   // March 15, 2024 -08:00
+            "1970-01-01Z",      // Unix epoch, UTC
+            "2024-03-15Z",      // March 15, 2024 UTC
+            "2024-03-15+05:30", // March 15, 2024 +05:30
+            "2024-03-15-08:00", // March 15, 2024 -08:00
         ];
 
         for date_str in test_cases {
@@ -987,7 +1493,12 @@ mod tests {
             // Compare the string values
             match (&value, &decoded) {
                 (Value::Date(v1), Value::Date(v2)) => {
-                    assert_eq!(v1.as_ref(), v2.as_ref(), "Roundtrip failed for {}", date_str);
+                    assert_eq!(
+                        v1.as_ref(),
+                        v2.as_ref(),
+                        "Roundtrip failed for {}",
+                        date_str
+                    );
                 }
                 _ => panic!("expected Date values"),
             }
@@ -1001,11 +1512,11 @@ mod tests {
 
         // Test various time values (RFC 3339 format)
         let test_cases = [
-            "00:00:00Z",              // Midnight UTC
-            "14:30:00Z",              // 14:30:00 UTC
-            "14:30:00.5+05:30",       // 14:30:00.500 +05:30
-            "23:59:59.999999Z",       // 23:59:59.999999 UTC
-            "00:00:00-05:00",         // Midnight -05:00
+            "00:00:00Z",        // Midnight UTC
+            "14:30:00Z",        // 14:30:00 UTC
+            "14:30:00.5+05:30", // 14:30:00.500 +05:30
+            "23:59:59.999999Z", // 23:59:59.999999 UTC
+            "00:00:00-05:00",   // Midnight -05:00
         ];
 
         for time_str in test_cases {
@@ -1020,7 +1531,12 @@ mod tests {
             // Compare the string values
             match (&value, &decoded) {
                 (Value::Time(v1), Value::Time(v2)) => {
-                    assert_eq!(v1.as_ref(), v2.as_ref(), "Roundtrip failed for {}", time_str);
+                    assert_eq!(
+                        v1.as_ref(),
+                        v2.as_ref(),
+                        "Roundtrip failed for {}",
+                        time_str
+                    );
                 }
                 _ => panic!("expected Time values"),
             }
@@ -1034,10 +1550,10 @@ mod tests {
 
         // Test various datetime values (RFC 3339 format)
         let test_cases = [
-            "1970-01-01T00:00:00Z",          // Unix epoch UTC
-            "2024-03-15T14:30:00Z",          // 2024-03-15T14:30:00Z
-            "2024-03-15T14:30:00+05:30",     // 2024-03-15T14:30:00+05:30
-            "2024-03-15T14:30:00.123456Z",   // With microseconds
+            "1970-01-01T00:00:00Z",        // Unix epoch UTC
+            "2024-03-15T14:30:00Z",        // 2024-03-15T14:30:00Z
+            "2024-03-15T14:30:00+05:30",   // 2024-03-15T14:30:00+05:30
+            "2024-03-15T14:30:00.123456Z", // With microseconds
         ];
 
         for datetime_str in test_cases {
@@ -1052,7 +1568,12 @@ mod tests {
             // Compare the string values
             match (&value, &decoded) {
                 (Value::Datetime(v1), Value::Datetime(v2)) => {
-                    assert_eq!(v1.as_ref(), v2.as_ref(), "Roundtrip failed for {}", datetime_str);
+                    assert_eq!(
+                        v1.as_ref(),
+                        v2.as_ref(),
+                        "Roundtrip failed for {}",
+                        datetime_str
+                    );
                 }
                 _ => panic!("expected Datetime values"),
             }
@@ -1117,7 +1638,7 @@ mod tests {
     #[test]
     fn test_big_decimal_normalization_helpers() {
         // Test is_big_mantissa_zero
-        assert!(is_big_mantissa_zero(&[]));
+        assert!(!is_big_mantissa_zero(&[]));
         assert!(is_big_mantissa_zero(&[0]));
         assert!(is_big_mantissa_zero(&[0, 0, 0]));
         assert!(!is_big_mantissa_zero(&[1]));
@@ -1146,9 +1667,38 @@ mod tests {
         assert!(!is_big_mantissa_divisible_by_10(&[0xF9])); // -7
     }
 
+    fn multiply_unsigned_be_by_10(bytes: &[u8]) -> Vec<u8> {
+        let mut result = Vec::with_capacity(bytes.len() + 1);
+        let mut carry = 0u16;
+
+        for &byte in bytes.iter().rev() {
+            let product = byte as u16 * 10 + carry;
+            result.push((product & 0xFF) as u8);
+            carry = product >> 8;
+        }
+
+        while carry != 0 {
+            result.push((carry & 0xFF) as u8);
+            carry >>= 8;
+        }
+
+        result.reverse();
+        result
+    }
+
+    fn decimal_power_of_ten_bytes(power: usize) -> Vec<u8> {
+        let mut magnitude = vec![1u8];
+        for _ in 0..power {
+            magnitude = multiply_unsigned_be_by_10(&magnitude);
+        }
+        signed_bytes_from_magnitude(false, &magnitude)
+    }
+
     #[test]
     fn test_big_decimal_normalization_encode() {
-        // Valid: mantissa not divisible by 10
+        let dicts = WireDictionaries::default();
+
+        // Valid: mantissa not divisible by 10 (already normalized)
         let valid = Value::Decimal {
             exponent: 0,
             mantissa: DecimalMantissa::Big(Cow::Owned(vec![0x07])), // 7
@@ -1157,28 +1707,62 @@ mod tests {
         let mut dict_builder = DictionaryBuilder::new();
         let mut writer = Writer::new();
         assert!(encode_value(&mut writer, &valid, &mut dict_builder).is_ok());
+        let mut reader = Reader::new(writer.as_bytes());
+        let decoded = decode_value(&mut reader, DataType::Decimal, &dicts).unwrap();
+        match decoded {
+            Value::Decimal {
+                exponent, mantissa, ..
+            } => {
+                assert_eq!(exponent, 0);
+                assert_eq!(mantissa, DecimalMantissa::I64(7)); // Big(7) normalized to I64(7)
+            }
+            _ => panic!("expected Decimal"),
+        }
 
-        // Invalid: mantissa is 10 (divisible by 10)
-        let invalid = Value::Decimal {
+        // Previously invalid: mantissa 10 (divisible by 10) — now normalized
+        let was_invalid = Value::Decimal {
             exponent: 0,
             mantissa: DecimalMantissa::Big(Cow::Owned(vec![0x0A])), // 10
             unit: None,
         };
         let mut dict_builder = DictionaryBuilder::new();
         let mut writer = Writer::new();
-        assert!(encode_value(&mut writer, &invalid, &mut dict_builder).is_err());
+        assert!(encode_value(&mut writer, &was_invalid, &mut dict_builder).is_ok());
+        let mut reader = Reader::new(writer.as_bytes());
+        let decoded = decode_value(&mut reader, DataType::Decimal, &dicts).unwrap();
+        match decoded {
+            Value::Decimal {
+                exponent, mantissa, ..
+            } => {
+                // 10 * 10^0 = 1 * 10^1
+                assert_eq!(exponent, 1);
+                assert_eq!(mantissa, DecimalMantissa::I64(1));
+            }
+            _ => panic!("expected Decimal"),
+        }
 
-        // Invalid: zero mantissa with non-zero exponent
-        let invalid_zero = Value::Decimal {
+        // Previously invalid: zero mantissa with non-zero exponent — now normalized
+        let was_invalid_zero = Value::Decimal {
             exponent: 1,
             mantissa: DecimalMantissa::Big(Cow::Owned(vec![0x00])),
             unit: None,
         };
         let mut dict_builder = DictionaryBuilder::new();
         let mut writer = Writer::new();
-        assert!(encode_value(&mut writer, &invalid_zero, &mut dict_builder).is_err());
+        assert!(encode_value(&mut writer, &was_invalid_zero, &mut dict_builder).is_ok());
+        let mut reader = Reader::new(writer.as_bytes());
+        let decoded = decode_value(&mut reader, DataType::Decimal, &dicts).unwrap();
+        match decoded {
+            Value::Decimal {
+                exponent, mantissa, ..
+            } => {
+                assert_eq!(exponent, 0);
+                assert_eq!(mantissa, DecimalMantissa::I64(0));
+            }
+            _ => panic!("expected Decimal"),
+        }
 
-        // Valid: zero mantissa with zero exponent
+        // Valid: zero mantissa with zero exponent (already normalized)
         let valid_zero = Value::Decimal {
             exponent: 0,
             mantissa: DecimalMantissa::Big(Cow::Owned(vec![0x00])),
@@ -1189,4 +1773,328 @@ mod tests {
         assert!(encode_value(&mut writer, &valid_zero, &mut dict_builder).is_ok());
     }
 
+    #[test]
+    fn test_decode_decimal_normalizes_large_big_mantissa_without_truncation() {
+        let dicts = WireDictionaries::default();
+        let large = vec![
+            0x0A, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00,
+        ];
+
+        let mut writer = Writer::new();
+        writer.write_signed_varint(0);
+        writer.write_byte(0x01);
+        writer.write_varint(large.len() as u64);
+        writer.write_bytes(&large);
+        writer.write_varint(0);
+
+        let mut reader = Reader::new(writer.as_bytes());
+        let decoded = decode_value(&mut reader, DataType::Decimal, &dicts).unwrap();
+
+        match decoded {
+            Value::Decimal {
+                exponent,
+                mantissa: DecimalMantissa::Big(bytes),
+                unit,
+            } => {
+                assert_eq!(exponent, 1);
+                assert_eq!(
+                    bytes.as_ref(),
+                    &[
+                        0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                        0x00, 0x00, 0x00, 0x00, 0x00
+                    ]
+                );
+                assert_eq!(unit, None);
+            }
+            other => panic!("expected large normalized Decimal, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_decode_decimal_keeps_borrowed_large_big_mantissa_when_already_canonical() {
+        let dicts = WireDictionaries::default();
+        let canonical = vec![
+            0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00,
+        ];
+
+        let mut writer = Writer::new();
+        writer.write_signed_varint(0);
+        writer.write_byte(0x01);
+        writer.write_varint(canonical.len() as u64);
+        writer.write_bytes(&canonical);
+        writer.write_varint(0);
+
+        let encoded = writer.as_bytes().to_vec();
+        let mut reader = Reader::new(&encoded);
+        let decoded = decode_value(&mut reader, DataType::Decimal, &dicts).unwrap();
+
+        match decoded {
+            Value::Decimal {
+                exponent,
+                mantissa: DecimalMantissa::Big(bytes),
+                unit,
+            } => {
+                assert_eq!(exponent, 0);
+                assert_eq!(bytes.as_ref(), canonical.as_slice());
+                assert!(matches!(bytes, Cow::Borrowed(_)));
+                assert_eq!(unit, None);
+            }
+            other => panic!("expected borrowed large Decimal, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_encode_decimal_normalizes_large_big_mantissa_without_truncation() {
+        let dicts = WireDictionaries::default();
+        let mut dict_builder = DictionaryBuilder::new();
+        let large = vec![
+            0x0A, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00,
+        ];
+        let value = Value::Decimal {
+            exponent: 0,
+            mantissa: DecimalMantissa::Big(Cow::Owned(large)),
+            unit: None,
+        };
+
+        let mut writer = Writer::new();
+        encode_value(&mut writer, &value, &mut dict_builder).unwrap();
+
+        let mut reader = Reader::new(writer.as_bytes());
+        let decoded = decode_value(&mut reader, DataType::Decimal, &dicts).unwrap();
+
+        match decoded {
+            Value::Decimal {
+                exponent,
+                mantissa: DecimalMantissa::Big(bytes),
+                ..
+            } => {
+                assert_eq!(exponent, 1);
+                assert_eq!(
+                    bytes.as_ref(),
+                    &[
+                        0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                        0x00, 0x00, 0x00, 0x00, 0x00
+                    ]
+                );
+            }
+            other => panic!("expected large normalized Decimal, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_encode_decimal_trims_non_minimal_big_mantissa_bytes() {
+        let dicts = WireDictionaries::default();
+        let mut dict_builder = DictionaryBuilder::new();
+        let value = Value::Decimal {
+            exponent: 0,
+            mantissa: DecimalMantissa::Big(Cow::Owned(vec![
+                0x00, 0x01, 0x23, 0x45, 0x67, 0x89, 0xAB, 0xCD, 0xEF, 0x01,
+            ])),
+            unit: None,
+        };
+
+        let mut writer = Writer::new();
+        encode_value(&mut writer, &value, &mut dict_builder).unwrap();
+
+        let mut reader = Reader::new(writer.as_bytes());
+        let decoded = decode_value(&mut reader, DataType::Decimal, &dicts).unwrap();
+
+        match decoded {
+            Value::Decimal {
+                exponent,
+                mantissa: DecimalMantissa::Big(bytes),
+                ..
+            } => {
+                assert_eq!(exponent, 0);
+                assert_eq!(
+                    bytes.as_ref(),
+                    &[0x01, 0x23, 0x45, 0x67, 0x89, 0xAB, 0xCD, 0xEF, 0x01]
+                );
+            }
+            other => panic!("expected canonical big Decimal, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_decode_decimal_rejects_empty_big_mantissa_bytes() {
+        let dicts = WireDictionaries::default();
+
+        let mut writer = Writer::new();
+        writer.write_signed_varint(0);
+        writer.write_byte(0x01);
+        writer.write_varint(0);
+        writer.write_varint(0);
+
+        let mut reader = Reader::new(writer.as_bytes());
+        let err = decode_value(&mut reader, DataType::Decimal, &dicts).unwrap_err();
+        assert_eq!(err, DecodeError::DecimalMantissaNotMinimal);
+    }
+
+    #[test]
+    fn test_decode_decimal_rejects_exponent_outside_i32_range() {
+        let dicts = WireDictionaries::default();
+
+        let mut writer = Writer::new();
+        writer.write_signed_varint(i32::MAX as i64 + 1);
+        writer.write_byte(0x00);
+        writer.write_signed_varint(1);
+        writer.write_varint(0);
+
+        let mut reader = Reader::new(writer.as_bytes());
+        let err = decode_value(&mut reader, DataType::Decimal, &dicts).unwrap_err();
+        assert_eq!(
+            err,
+            DecodeError::MalformedEncoding {
+                context: DECIMAL_EXPONENT_OUT_OF_RANGE,
+            }
+        );
+    }
+
+    #[test]
+    fn test_decode_decimal_rejects_exponent_overflow_during_normalization() {
+        let dicts = WireDictionaries::default();
+
+        let mut writer = Writer::new();
+        writer.write_signed_varint(i32::MAX as i64);
+        writer.write_byte(0x00);
+        writer.write_signed_varint(10);
+        writer.write_varint(0);
+
+        let mut reader = Reader::new(writer.as_bytes());
+        let err = decode_value(&mut reader, DataType::Decimal, &dicts).unwrap_err();
+        assert_eq!(
+            err,
+            DecodeError::MalformedEncoding {
+                context: DECIMAL_EXPONENT_OUT_OF_RANGE,
+            }
+        );
+    }
+
+    #[test]
+    fn test_encode_decimal_rejects_exponent_overflow_during_normalization() {
+        let value = Value::Decimal {
+            exponent: i32::MAX,
+            mantissa: DecimalMantissa::I64(10),
+            unit: None,
+        };
+
+        let mut dict_builder = DictionaryBuilder::new();
+        let mut writer = Writer::new();
+        let err = encode_value(&mut writer, &value, &mut dict_builder).unwrap_err();
+        assert_eq!(
+            err,
+            EncodeError::InvalidInput {
+                context: DECIMAL_EXPONENT_OUT_OF_RANGE,
+            }
+        );
+    }
+
+    #[test]
+    fn test_encode_decimal_rejects_empty_big_mantissa_bytes() {
+        let value = Value::Decimal {
+            exponent: 0,
+            mantissa: DecimalMantissa::Big(Cow::Owned(Vec::new())),
+            unit: None,
+        };
+
+        let mut dict_builder = DictionaryBuilder::new();
+        let mut writer = Writer::new();
+        let err = encode_value(&mut writer, &value, &mut dict_builder).unwrap_err();
+        assert_eq!(
+            err,
+            EncodeError::InvalidInput {
+                context: DECIMAL_EMPTY_BIG_MANTISSA,
+            }
+        );
+    }
+
+    #[test]
+    fn test_encode_decimal_rejects_big_mantissa_length_over_limit() {
+        let mut oversized = vec![0u8; MAX_BYTES_LEN + 1];
+        oversized[0] = 1;
+        let value = Value::Decimal {
+            exponent: 0,
+            mantissa: DecimalMantissa::Big(Cow::Owned(oversized)),
+            unit: None,
+        };
+
+        let mut dict_builder = DictionaryBuilder::new();
+        let mut writer = Writer::new();
+        let err = encode_value(&mut writer, &value, &mut dict_builder).unwrap_err();
+        assert_eq!(
+            err,
+            EncodeError::LengthExceedsLimit {
+                field: "decimal.mantissa",
+                len: MAX_BYTES_LEN + 1,
+                max: MAX_BYTES_LEN,
+            }
+        );
+    }
+
+    #[test]
+    fn test_decode_decimal_rejects_excessive_normalization_steps() {
+        let dicts = WireDictionaries::default();
+        let bytes = decimal_power_of_ten_bytes(MAX_DECIMAL_NORMALIZATION_STEPS + 1);
+
+        let mut writer = Writer::new();
+        writer.write_signed_varint(0);
+        writer.write_byte(0x01);
+        writer.write_varint(bytes.len() as u64);
+        writer.write_bytes(&bytes);
+        writer.write_varint(0);
+
+        let mut reader = Reader::new(writer.as_bytes());
+        let err = decode_value(&mut reader, DataType::Decimal, &dicts).unwrap_err();
+        assert_eq!(
+            err,
+            DecodeError::MalformedEncoding {
+                context: DECIMAL_NORMALIZATION_STEP_LIMIT_EXCEEDED,
+            }
+        );
+    }
+
+    #[test]
+    fn test_encode_decimal_rejects_excessive_normalization_steps() {
+        let value = Value::Decimal {
+            exponent: 0,
+            mantissa: DecimalMantissa::Big(Cow::Owned(decimal_power_of_ten_bytes(
+                MAX_DECIMAL_NORMALIZATION_STEPS + 1,
+            ))),
+            unit: None,
+        };
+
+        let mut dict_builder = DictionaryBuilder::new();
+        let mut writer = Writer::new();
+        let err = encode_value(&mut writer, &value, &mut dict_builder).unwrap_err();
+        assert_eq!(
+            err,
+            EncodeError::InvalidInput {
+                context: DECIMAL_NORMALIZATION_STEP_LIMIT_EXCEEDED,
+            }
+        );
+    }
+
+    #[test]
+    fn test_decode_decimal_rejects_big_mantissa_length_over_limit() {
+        let dicts = WireDictionaries::default();
+
+        let mut writer = Writer::new();
+        writer.write_signed_varint(0);
+        writer.write_byte(0x01);
+        writer.write_varint(MAX_BYTES_LEN as u64 + 1);
+
+        let mut reader = Reader::new(writer.as_bytes());
+        let err = decode_value(&mut reader, DataType::Decimal, &dicts).unwrap_err();
+        assert_eq!(
+            err,
+            DecodeError::LengthExceedsLimit {
+                field: "decimal.mantissa",
+                len: MAX_BYTES_LEN + 1,
+                max: MAX_BYTES_LEN,
+            }
+        );
+    }
 }

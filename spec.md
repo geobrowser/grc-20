@@ -186,7 +186,7 @@ Examples:
 - `$12.34` → `{ exponent: -2, mantissa: 1234 }`
 - `0.000001` → `{ exponent: -6, mantissa: 1 }`
 
-> **NORMATIVE:** DECIMAL values MUST be encoded in normalized form: mantissa has no trailing zeros, and zero is represented as `{ exponent: 0, mantissa: 0 }`. This ensures deterministic encoding for content addressing.
+> **NORMATIVE:** DECIMAL values MUST be encoded in normalized form: mantissa has no trailing zeros, and zero is represented as `{ exponent: 0, mantissa: 0 }`. This ensures deterministic encoding for content addressing. Decoders and indexers SHOULD accept legacy non-normalized DECIMAL payloads and normalize them after decoding so already-published data remains interoperable.
 
 Applications needing to preserve display precision (e.g., "12.30" vs "12.3") can use the property's format to indicate the intended presentation. The format is specified on the property entity in the knowledge graph. The normalized DECIMAL ensures deterministic encoding; the property's format controls how all its values render.
 

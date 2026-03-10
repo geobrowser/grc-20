@@ -316,7 +316,9 @@ Embedding:
 > - If mantissa fits in signed 64-bit integer (-2^63 to 2^63-1), `mantissa_type` MUST be `0x00` (varint).
 > - `mantissa_type = 0x01` (bytes) is reserved for values outside int64 range.
 > - When `mantissa_type = 0x01`, mantissa bytes MUST be big-endian two's complement, minimal-length (no redundant sign extension).
-> - Non-compliant encodings MUST be rejected (E005).
+> - Encoders MUST emit normalized DECIMAL values.
+> - Decoders SHOULD accept legacy non-normalized DECIMAL values and normalize them after decoding.
+> - Non-minimal mantissa bytes MUST be rejected (E005).
 
 ---
 
@@ -417,7 +419,6 @@ Indexers MUST reject edits that fail structural validation:
 | Varint encoding | Overlong encoding or exceeds 10 bytes |
 | Reserved bits | Non-zero |
 | Mantissa bytes | Non-minimal encoding |
-| DECIMAL normalization | Mantissa has trailing zeros, or zero not encoded as {0,0} |
 | Signatures | Invalid (if governance requires) |
 | BOOLEAN values | Not 0x00 or 0x01 |
 | POINT bounds | Latitude outside [-90, +90] or longitude outside [-180, +180] |

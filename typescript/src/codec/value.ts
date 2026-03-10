@@ -11,6 +11,14 @@ import {
   formatDatetimeRfc3339,
 } from "../util/datetime.js";
 
+const MIN_I32 = -2147483648;
+const MAX_I32 = 2147483647;
+const MAX_BYTES_LEN = 64 * 1024 * 1024;
+const DECIMAL_EXPONENT_OUT_OF_RANGE = "DECIMAL exponent outside int32 range";
+const DECIMAL_EMPTY_BIG_MANTISSA = "DECIMAL mantissa bytes must not be empty";
+const DECIMAL_NORMALIZATION_STEP_LIMIT_EXCEEDED = "DECIMAL normalization exceeds maximum steps";
+const MAX_DECIMAL_NORMALIZATION_STEPS = 4096;
+
 /**
  * Dictionary builder for tracking property/language/unit indices.
  */
@@ -150,17 +158,314 @@ export function encodeValuePayload(writer: Writer, value: Value): void {
 }
 
 /**
- * Encodes a decimal value.
+ * Normalizes a decimal value by stripping trailing zeros from the mantissa
+ * and adjusting the exponent accordingly.
+ *
+ * Examples:
+ * - (mantissa: 100, exponent: -2) → (mantissa: 1, exponent: 0)
+ * - (mantissa: 1230, exponent: -2) → (mantissa: 123, exponent: -1)
+ * - (mantissa: 0, exponent: 5) → (mantissa: 0, exponent: 0)
  */
-function encodeDecimal(writer: Writer, exponent: number, mantissa: DecimalMantissa): void {
-  writer.writeSignedVarint(BigInt(exponent));
+function normalizeDecimal(
+  exponent: number,
+  mantissa: DecimalMantissa,
+  mode: "encode" | "decode"
+): { exponent: number; mantissa: DecimalMantissa } {
+  ensureDecimalExponent(exponent, mode);
+  ensureDecimalBigMantissaLength(mantissa, mode);
 
   if (mantissa.type === "i64") {
+    let value = mantissa.value;
+    let exp = exponent;
+
+    // Zero mantissa must have exponent 0
+    if (value === 0n) {
+      return { exponent: 0, mantissa: { type: "i64", value: 0n } };
+    }
+
+    // Strip trailing zeros
+    while (value !== 0n && value % 10n === 0n) {
+      value = value / 10n;
+      exp = incrementDecimalExponent(exp, mode);
+    }
+
+    return { exponent: exp, mantissa: { type: "i64", value } };
+  } else {
+    const bytes = mantissa.bytes;
+    if (bytes.length === 0) {
+      throw decimalEmptyBigMantissaError(mode);
+    }
+
+    const isZero = isBigMantissaZero(bytes);
+    if (isZero) {
+      return { exponent: 0, mantissa: { type: "i64", value: 0n } };
+    }
+
+    if (!bigMantissaNeedsCanonicalization(bytes, isZero)) {
+      return { exponent, mantissa };
+    }
+
+    let exp = exponent;
+    const isNegative = (bytes[0] & 0x80) !== 0;
+    let magnitude = twosComplementAbsBytes(bytes);
+    let steps = 0;
+    while (true) {
+      const { quotient, remainder } = divideUnsignedBeBy10(magnitude);
+      if (remainder !== 0) {
+        break;
+      }
+      steps += 1;
+      if (steps > MAX_DECIMAL_NORMALIZATION_STEPS) {
+        throw decimalNormalizationStepLimitError(mode);
+      }
+      magnitude = quotient;
+      exp = incrementDecimalExponent(exp, mode);
+    }
+
+    const canonicalBytes = signedBytesFromMagnitude(isNegative, magnitude);
+    const i64Value = twosComplementBytesToI64(canonicalBytes);
+    if (i64Value !== null) {
+      return { exponent: exp, mantissa: { type: "i64", value: i64Value } };
+    }
+
+    return { exponent: exp, mantissa: { type: "big", bytes: canonicalBytes } };
+  }
+}
+
+function ensureDecimalExponent(exponent: number, mode: "encode" | "decode"): void {
+  if (!Number.isInteger(exponent) || exponent < MIN_I32 || exponent > MAX_I32) {
+    throw decimalExponentError(mode);
+  }
+}
+
+function incrementDecimalExponent(exponent: number, mode: "encode" | "decode"): number {
+  if (exponent === MAX_I32) {
+    throw decimalExponentError(mode);
+  }
+  return exponent + 1;
+}
+
+function decimalExponentError(mode: "encode" | "decode"): Error {
+  return mode === "decode"
+    ? new DecodeError("E005", DECIMAL_EXPONENT_OUT_OF_RANGE)
+    : new Error(DECIMAL_EXPONENT_OUT_OF_RANGE);
+}
+
+function decimalEmptyBigMantissaError(mode: "encode" | "decode"): Error {
+  return mode === "decode"
+    ? new DecodeError("E005", DECIMAL_EMPTY_BIG_MANTISSA)
+    : new Error(DECIMAL_EMPTY_BIG_MANTISSA);
+}
+
+function decimalNormalizationStepLimitError(mode: "encode" | "decode"): Error {
+  return mode === "decode"
+    ? new DecodeError("E005", DECIMAL_NORMALIZATION_STEP_LIMIT_EXCEEDED)
+    : new Error(DECIMAL_NORMALIZATION_STEP_LIMIT_EXCEEDED);
+}
+
+function ensureDecimalBigMantissaLength(
+  mantissa: DecimalMantissa,
+  mode: "encode" | "decode"
+): void {
+  if (mantissa.type === "big" && mantissa.bytes.length > MAX_BYTES_LEN) {
+    throw decimalBigMantissaLengthError(mantissa.bytes.length, mode);
+  }
+}
+
+function decimalBigMantissaLengthError(length: number, mode: "encode" | "decode"): Error {
+  const message = `decimal mantissa length ${length} exceeds maximum ${MAX_BYTES_LEN}`;
+  return mode === "decode" ? new DecodeError("E005", message) : new Error(message);
+}
+
+function readDecimalExponent(reader: Reader): number {
+  const exponent = reader.readSignedVarint();
+  if (exponent < BigInt(MIN_I32) || exponent > BigInt(MAX_I32)) {
+    throw decimalExponentError("decode");
+  }
+  return Number(exponent);
+}
+
+function isBigMantissaZero(bytes: Uint8Array): boolean {
+  return bytes.length > 0 && bytes.every((byte) => byte === 0);
+}
+
+function hasRedundantSignExtension(bytes: Uint8Array): boolean {
+  return bytes.length > 1
+    && ((bytes[0] === 0x00 && (bytes[1] & 0x80) === 0)
+      || (bytes[0] === 0xFF && (bytes[1] & 0x80) !== 0));
+}
+
+function trimTwosComplement(bytes: Uint8Array): Uint8Array {
+  let start = 0;
+  while (start < bytes.length - 1) {
+    const first = bytes[start];
+    const second = bytes[start + 1];
+    if ((first === 0x00 && (second & 0x80) === 0) || (first === 0xFF && (second & 0x80) !== 0)) {
+      start += 1;
+      continue;
+    }
+    break;
+  }
+  return start === 0 ? bytes : bytes.slice(start);
+}
+
+function bigMantissaNeedsCanonicalization(bytes: Uint8Array, isZero: boolean = isBigMantissaZero(bytes)): boolean {
+  return hasRedundantSignExtension(bytes)
+    || isZero
+    || isBigMantissaDivisibleBy10(bytes)
+    || twosComplementBytesToI64(bytes) !== null;
+}
+
+function isBigMantissaDivisibleBy10(bytes: Uint8Array): boolean {
+  if (bytes.length === 0) {
+    return true;
+  }
+
+  const isNegative = (bytes[0] & 0x80) !== 0;
+  if (isNegative) {
+    return twosComplementAbsMod10(bytes) === 0;
+  }
+
+  let remainder = 0;
+  for (const byte of bytes) {
+    remainder = (remainder * 6 + byte) % 10;
+  }
+  return remainder === 0;
+}
+
+function twosComplementAbsMod10(bytes: Uint8Array): number {
+  let remainder = 0;
+  for (const byte of bytes) {
+    remainder = (remainder * 6 + (~byte & 0xFF)) % 10;
+  }
+  return (remainder + 1) % 10;
+}
+
+function twosComplementAbsBytes(bytes: Uint8Array): Uint8Array {
+  if (bytes.length === 0) {
+    return new Uint8Array();
+  }
+
+  if ((bytes[0] & 0x80) === 0) {
+    let start = 0;
+    while (start < bytes.length && bytes[start] === 0) {
+      start += 1;
+    }
+    return bytes.slice(start);
+  }
+
+  const magnitude = new Uint8Array(bytes.length);
+  let carry = 1;
+  for (let i = bytes.length - 1; i >= 0; i--) {
+    const sum = (~bytes[i] & 0xFF) + carry;
+    magnitude[i] = sum & 0xFF;
+    carry = sum >> 8;
+  }
+
+  let start = 0;
+  while (start < magnitude.length && magnitude[start] === 0) {
+    start += 1;
+  }
+  return magnitude.slice(start);
+}
+
+function divideUnsignedBeBy10(bytes: Uint8Array): { quotient: Uint8Array; remainder: number } {
+  const quotient = new Uint8Array(bytes.length);
+  let remainder = 0;
+
+  for (let i = 0; i < bytes.length; i++) {
+    const current = (remainder << 8) | bytes[i];
+    quotient[i] = Math.floor(current / 10);
+    remainder = current % 10;
+  }
+
+  let start = 0;
+  while (start < quotient.length && quotient[start] === 0) {
+    start += 1;
+  }
+  return { quotient: quotient.slice(start), remainder };
+}
+
+function signedBytesFromMagnitude(isNegative: boolean, magnitude: Uint8Array): Uint8Array {
+  if (magnitude.length === 0) {
+    return new Uint8Array([0]);
+  }
+
+  let start = 0;
+  while (start < magnitude.length && magnitude[start] === 0) {
+    start += 1;
+  }
+  const trimmed = magnitude.slice(start);
+  if (trimmed.length === 0) {
+    return new Uint8Array([0]);
+  }
+
+  if (!isNegative) {
+    if ((trimmed[0] & 0x80) === 0) {
+      return trimmed;
+    }
+    const bytes = new Uint8Array(trimmed.length + 1);
+    bytes.set(trimmed, 1);
+    return bytes;
+  }
+
+  const fitsInCurrentWidth = trimmed[0] < 0x80
+    || (trimmed[0] === 0x80 && trimmed.slice(1).every((byte) => byte === 0));
+  const width = fitsInCurrentWidth ? trimmed.length : trimmed.length + 1;
+  const bytes = new Uint8Array(width);
+  bytes.set(trimmed, width - trimmed.length);
+
+  for (let i = 0; i < bytes.length; i++) {
+    bytes[i] = ~bytes[i] & 0xFF;
+  }
+
+  let carry = 1;
+  for (let i = bytes.length - 1; i >= 0; i--) {
+    const sum = bytes[i] + carry;
+    bytes[i] = sum & 0xFF;
+    carry = sum >> 8;
+  }
+
+  return trimTwosComplement(bytes);
+}
+
+function twosComplementBytesToI64(bytes: Uint8Array): bigint | null {
+  if (bytes.length === 0) {
+    return 0n;
+  }
+  if (bytes.length > 8) {
+    return null;
+  }
+
+  const fill = (bytes[0] & 0x80) !== 0 ? 0xFF : 0x00;
+  let value = 0n;
+  for (let i = 0; i < 8 - bytes.length; i++) {
+    value = (value << 8n) | BigInt(fill);
+  }
+  for (const byte of bytes) {
+    value = (value << 8n) | BigInt(byte);
+  }
+  if ((value & (1n << 63n)) !== 0n) {
+    value -= 1n << 64n;
+  }
+  return value;
+}
+
+/**
+ * Encodes a decimal value. Normalizes the mantissa/exponent before encoding
+ * to ensure trailing zeros are stripped.
+ */
+function encodeDecimal(writer: Writer, exponent: number, mantissa: DecimalMantissa): void {
+  const normalized = normalizeDecimal(exponent, mantissa, "encode");
+
+  writer.writeSignedVarint(BigInt(normalized.exponent));
+
+  if (normalized.mantissa.type === "i64") {
     writer.writeByte(0x00); // mantissa_type = varint
-    writer.writeSignedVarint(mantissa.value);
+    writer.writeSignedVarint(normalized.mantissa.value);
   } else {
     writer.writeByte(0x01); // mantissa_type = bytes
-    writer.writeLengthPrefixedBytes(mantissa.bytes);
+    writer.writeLengthPrefixedBytes(normalized.mantissa.bytes);
   }
 }
 
@@ -219,17 +524,25 @@ export function decodeValuePayload(reader: Reader, dataType: DataType): Value {
     }
 
     case DataType.Decimal: {
-      const exponent = Number(reader.readSignedVarint());
+      const exponent = readDecimalExponent(reader);
       const mantissaType = reader.readByte();
       let mantissa: DecimalMantissa;
       if (mantissaType === 0x00) {
         mantissa = { type: "i64", value: reader.readSignedVarint() };
       } else if (mantissaType === 0x01) {
-        mantissa = { type: "big", bytes: reader.readLengthPrefixedBytes() };
+        const len = reader.readVarintNumber();
+        if (len > MAX_BYTES_LEN) {
+          throw decimalBigMantissaLengthError(len, "decode");
+        }
+        const bytes = new Uint8Array(reader.readBytes(len));
+        if (bytes.length === 0 || hasRedundantSignExtension(bytes)) {
+          throw new DecodeError("E005", "decimal mantissa bytes are not minimal");
+        }
+        mantissa = { type: "big", bytes };
       } else {
         throw new DecodeError("E005", `invalid decimal mantissa type: ${mantissaType}`);
       }
-      return { type: "decimal", exponent, mantissa };
+      return { type: "decimal", ...normalizeDecimal(exponent, mantissa, "decode") };
     }
 
     case DataType.Text: {
