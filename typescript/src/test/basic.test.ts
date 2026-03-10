@@ -34,7 +34,10 @@ import {
   languages,
   idsEqual,
   Reader,
+  Writer,
 } from "../index.js";
+import { decodeValuePayload, encodeValuePayload } from "../codec/value.js";
+import { DataType } from "../types/value.js";
 
 function readObjectIds(encoded: Uint8Array): Id[] {
   const reader = new Reader(encoded);
@@ -1470,6 +1473,58 @@ describe("Decimal normalization", () => {
         expect(val.exponent).toBe(2);
       }
     }
+  });
+
+  it("normalizes raw decoded decimals so TypeScript matches Rust", () => {
+    const writer = new Writer();
+    writer.writeSignedVarint(-2n);
+    writer.writeByte(0x00);
+    writer.writeSignedVarint(100n);
+
+    const decoded = decodeValuePayload(new Reader(writer.finish()), DataType.Decimal);
+    expect(decoded).toEqual({
+      type: "decimal",
+      exponent: 0,
+      mantissa: { type: "i64", value: 1n },
+    });
+  });
+
+  it("normalizes raw decoded large big mantissas without truncation", () => {
+    const large = new Uint8Array([0x0A, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+      0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]);
+    const writer = new Writer();
+    writer.writeSignedVarint(0n);
+    writer.writeByte(0x01);
+    writer.writeLengthPrefixedBytes(large);
+
+    const decoded = decodeValuePayload(new Reader(writer.finish()), DataType.Decimal);
+    expect(decoded).toEqual({
+      type: "decimal",
+      exponent: 1,
+      mantissa: {
+        type: "big",
+        bytes: new Uint8Array([0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+          0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]),
+      },
+    });
+  });
+
+  it("keeps negative big power-of-two mantissas minimally encoded", () => {
+    const writer = new Writer();
+    encodeValuePayload(writer, {
+      type: "decimal",
+      exponent: 0,
+      mantissa: {
+        type: "big",
+        bytes: new Uint8Array([0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]),
+      },
+    });
+
+    const reader = new Reader(writer.finish());
+    expect(reader.readSignedVarint()).toBe(0n);
+    expect(reader.readByte()).toBe(0x01);
+    const encodedBytes = reader.readLengthPrefixedBytes();
+    expect(encodedBytes).toEqual(new Uint8Array([0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]));
   });
 });
 

@@ -179,39 +179,30 @@ function normalizeDecimal(
 
     return { exponent: exp, mantissa: { type: "i64", value } };
   } else {
-    // Big mantissa (big-endian two's complement bytes)
     const bytes = mantissa.bytes;
 
-    // Check if zero
     if (bytes.every((b) => b === 0)) {
       return { exponent: 0, mantissa: { type: "i64", value: 0n } };
     }
 
-    // Convert big-endian two's complement to BigInt for normalization
-    const isNegative = bytes.length > 0 && (bytes[0] & 0x80) !== 0;
-    let value = 0n;
-    for (const byte of bytes) {
-      value = (value << 8n) | BigInt(byte);
-    }
-    // If negative, sign-extend: the bytes represent a two's complement value
-    if (isNegative) {
-      value = value - (1n << BigInt(bytes.length * 8));
-    }
+    const value = twosComplementBytesToBigInt(bytes);
 
-    // Strip trailing zeros
     let exp = exponent;
-    while (value !== 0n && value % 10n === 0n) {
-      value = value / 10n;
+    let normalized = value;
+    while (normalized !== 0n && normalized % 10n === 0n) {
+      normalized = normalized / 10n;
       exp += 1;
     }
 
-    // If it fits in i64 range, use i64 encoding (more compact)
-    if (value >= -9223372036854775808n && value <= 9223372036854775807n) {
-      return { exponent: exp, mantissa: { type: "i64", value } };
+    if (normalized >= -9223372036854775808n && normalized <= 9223372036854775807n) {
+      return { exponent: exp, mantissa: { type: "i64", value: normalized } };
     }
 
-    // Convert back to big-endian two's complement bytes (minimal encoding)
-    const resultBytes = bigIntToMinimalTwosComplement(value);
+    if (normalized === value && exp === exponent) {
+      return { exponent, mantissa };
+    }
+
+    const resultBytes = bigIntToMinimalTwosComplement(normalized);
     return { exponent: exp, mantissa: { type: "big", bytes: resultBytes } };
   }
 }
@@ -245,7 +236,43 @@ function bigIntToMinimalTwosComplement(value: bigint): Uint8Array {
     encoded >>= 8n;
   }
 
-  return bytes;
+  return trimTwosComplement(bytes);
+}
+
+function twosComplementBytesToBigInt(bytes: Uint8Array): bigint {
+  if (bytes.length === 0) {
+    return 0n;
+  }
+
+  const isNegative = (bytes[0] & 0x80) !== 0;
+  let value = 0n;
+  for (const byte of bytes) {
+    value = (value << 8n) | BigInt(byte);
+  }
+  if (isNegative) {
+    value -= 1n << BigInt(bytes.length * 8);
+  }
+  return value;
+}
+
+function hasRedundantSignExtension(bytes: Uint8Array): boolean {
+  return bytes.length > 1
+    && ((bytes[0] === 0x00 && (bytes[1] & 0x80) === 0)
+      || (bytes[0] === 0xFF && (bytes[1] & 0x80) !== 0));
+}
+
+function trimTwosComplement(bytes: Uint8Array): Uint8Array {
+  let start = 0;
+  while (start < bytes.length - 1) {
+    const first = bytes[start];
+    const second = bytes[start + 1];
+    if ((first === 0x00 && (second & 0x80) === 0) || (first === 0xFF && (second & 0x80) !== 0)) {
+      start += 1;
+      continue;
+    }
+    break;
+  }
+  return start === 0 ? bytes : bytes.slice(start);
 }
 
 /**
@@ -327,11 +354,15 @@ export function decodeValuePayload(reader: Reader, dataType: DataType): Value {
       if (mantissaType === 0x00) {
         mantissa = { type: "i64", value: reader.readSignedVarint() };
       } else if (mantissaType === 0x01) {
-        mantissa = { type: "big", bytes: reader.readLengthPrefixedBytes() };
+        const bytes = reader.readLengthPrefixedBytes();
+        if (hasRedundantSignExtension(bytes)) {
+          throw new DecodeError("E005", "decimal mantissa bytes are not minimal");
+        }
+        mantissa = { type: "big", bytes };
       } else {
         throw new DecodeError("E005", `invalid decimal mantissa type: ${mantissaType}`);
       }
-      return { type: "decimal", exponent, mantissa };
+      return { type: "decimal", ...normalizeDecimal(exponent, mantissa) };
     }
 
     case DataType.Text: {

@@ -137,9 +137,9 @@ fn decode_decimal<'a>(
         }
     };
 
-    // Normalize on read: strip trailing zeros from mantissa and adjust exponent.
-    // This handles already-published edits with non-normalized decimals.
-    let (exponent, mantissa) = normalize_decimal(exponent, &mantissa);
+    // Normalize on read to handle already-published edits with non-normalized
+    // decimals, while preserving borrowed bytes for canonical big mantissas.
+    let (exponent, mantissa) = normalize_decimal_for_decode(exponent, mantissa);
 
     let unit_index = reader.read_varint("decimal.unit")? as usize;
     let unit = if unit_index == 0 {
@@ -175,7 +175,6 @@ fn is_big_mantissa_zero(bytes: &[u8]) -> bool {
 /// Since 256 mod 10 = 6, we can compute iteratively: (carry * 6 + byte) mod 10.
 ///
 /// For negative numbers (high bit set), we need to handle two's complement.
-#[cfg(test)]
 fn is_big_mantissa_divisible_by_10(bytes: &[u8]) -> bool {
     if bytes.is_empty() {
         return true; // Zero is divisible by 10
@@ -203,7 +202,6 @@ fn is_big_mantissa_divisible_by_10(bytes: &[u8]) -> bool {
 }
 
 /// Computes |x| mod 10 for a negative two's complement number.
-#[cfg(test)]
 fn twos_complement_abs_mod_10(bytes: &[u8]) -> u32 {
     // Two's complement negation: invert all bits and add 1
     // To get |x| mod 10, we compute (-x) mod 10
@@ -672,14 +670,27 @@ pub fn encode_value(
     Ok(())
 }
 
-/// Normalizes a decimal by stripping trailing zeros from the mantissa and
-/// adjusting the exponent. Returns the normalized (exponent, mantissa) pair.
+/// Returns whether the mantissa must be canonicalized to satisfy the
+/// normalization rules or the preferred wire representation.
 ///
-/// Examples:
-/// - (mantissa: 100, exponent: -2) → (mantissa: 1, exponent: 0)
-/// - (mantissa: 1230, exponent: -2) → (mantissa: 123, exponent: -1)
-/// - (mantissa: 0, exponent: 5) → (mantissa: 0, exponent: 0)
-fn normalize_decimal(
+/// This is true when:
+/// - zero is not encoded as `I64(0)` with exponent 0
+/// - the mantissa still has trailing decimal zeros
+/// - a big mantissa now fits in `i64` and should use the compact varint form
+fn decimal_needs_canonicalization(exponent: i32, mantissa: &DecimalMantissa<'_>) -> bool {
+    match mantissa {
+        DecimalMantissa::I64(v) => (*v == 0 && exponent != 0) || (*v != 0 && *v % 10 == 0),
+        DecimalMantissa::Big(bytes) => {
+            is_big_mantissa_zero(bytes)
+                || is_big_mantissa_divisible_by_10(bytes)
+                || twos_complement_bytes_to_i64(bytes).is_some()
+        }
+    }
+}
+
+/// Normalizes a decimal by stripping trailing zeros from the mantissa and
+/// adjusting the exponent. Returns an owned canonical representation.
+fn normalize_decimal_owned(
     exponent: i32,
     mantissa: &DecimalMantissa<'_>,
 ) -> (i32, DecimalMantissa<'static>) {
@@ -704,64 +715,151 @@ fn normalize_decimal(
                 return (0, DecimalMantissa::I64(0));
             }
 
-            // Convert big-endian two's complement to i128 for normalization.
-            // This handles values up to 128 bits which covers all practical cases.
-            let value = big_mantissa_to_i128(bytes);
-            let mut norm = value;
+            let is_negative = bytes[0] & 0x80 != 0;
+            let mut magnitude = twos_complement_abs_bytes(bytes);
             let mut exp = exponent;
 
-            while norm != 0 && norm % 10 == 0 {
-                norm /= 10;
+            loop {
+                let (quotient, remainder) = divide_unsigned_be_by_10(&magnitude);
+                if remainder != 0 {
+                    break;
+                }
+                magnitude = quotient;
                 exp += 1;
             }
 
-            // If it fits in i64, use the more compact representation
-            if norm >= i64::MIN as i128 && norm <= i64::MAX as i128 {
-                (exp, DecimalMantissa::I64(norm as i64))
+            let canonical_bytes = signed_bytes_from_magnitude(is_negative, &magnitude);
+            if let Some(value) = twos_complement_bytes_to_i64(&canonical_bytes) {
+                (exp, DecimalMantissa::I64(value))
             } else {
-                (
-                    exp,
-                    DecimalMantissa::Big(Cow::Owned(i128_to_minimal_twos_complement(norm))),
-                )
+                (exp, DecimalMantissa::Big(Cow::Owned(canonical_bytes)))
             }
         }
     }
 }
 
-/// Converts big-endian two's complement bytes to i128.
-fn big_mantissa_to_i128(bytes: &[u8]) -> i128 {
-    if bytes.is_empty() {
-        return 0;
+fn normalize_decimal_for_decode<'a>(
+    exponent: i32,
+    mantissa: DecimalMantissa<'a>,
+) -> (i32, DecimalMantissa<'a>) {
+    if !decimal_needs_canonicalization(exponent, &mantissa) {
+        return (exponent, mantissa);
     }
-    let is_negative = bytes[0] & 0x80 != 0;
-    let mut value: i128 = if is_negative { -1 } else { 0 };
-    for &byte in bytes {
-        value = (value << 8) | byte as i128;
+
+    let (exp, canonical) = normalize_decimal_owned(exponent, &mantissa);
+    match canonical {
+        DecimalMantissa::I64(value) => (exp, DecimalMantissa::I64(value)),
+        DecimalMantissa::Big(bytes) => (exp, DecimalMantissa::Big(Cow::Owned(bytes.into_owned()))),
     }
-    value
 }
 
-/// Converts an i128 to minimal big-endian two's complement bytes.
-fn i128_to_minimal_twos_complement(value: i128) -> Vec<u8> {
-    if value == 0 {
+fn twos_complement_abs_bytes(bytes: &[u8]) -> Vec<u8> {
+    if bytes.is_empty() {
+        return Vec::new();
+    }
+
+    if bytes[0] & 0x80 == 0 {
+        let first_non_zero = bytes
+            .iter()
+            .position(|&byte| byte != 0)
+            .unwrap_or(bytes.len());
+        return bytes[first_non_zero..].to_vec();
+    }
+
+    let mut magnitude = vec![0u8; bytes.len()];
+    let mut carry = 1u16;
+    for (index, &byte) in bytes.iter().enumerate().rev() {
+        let sum = (!byte as u16) + carry;
+        magnitude[index] = sum as u8;
+        carry = sum >> 8;
+    }
+
+    let first_non_zero = magnitude
+        .iter()
+        .position(|&byte| byte != 0)
+        .unwrap_or(magnitude.len());
+    magnitude[first_non_zero..].to_vec()
+}
+
+fn divide_unsigned_be_by_10(bytes: &[u8]) -> (Vec<u8>, u8) {
+    let mut quotient = Vec::with_capacity(bytes.len());
+    let mut remainder = 0u16;
+
+    for &byte in bytes {
+        let current = (remainder << 8) | byte as u16;
+        quotient.push((current / 10) as u8);
+        remainder = current % 10;
+    }
+
+    let first_non_zero = quotient
+        .iter()
+        .position(|&byte| byte != 0)
+        .unwrap_or(quotient.len());
+    (quotient[first_non_zero..].to_vec(), remainder as u8)
+}
+
+fn signed_bytes_from_magnitude(is_negative: bool, magnitude: &[u8]) -> Vec<u8> {
+    if magnitude.is_empty() {
         return vec![0];
     }
 
-    let bytes = value.to_be_bytes();
-
-    // Find the first significant byte (skip redundant sign extension)
-    let mut start = 0;
-    if value > 0 {
-        while start < bytes.len() - 1 && bytes[start] == 0x00 && (bytes[start + 1] & 0x80) == 0 {
-            start += 1;
-        }
-    } else {
-        while start < bytes.len() - 1 && bytes[start] == 0xFF && (bytes[start + 1] & 0x80) != 0 {
-            start += 1;
-        }
+    let first_non_zero = magnitude
+        .iter()
+        .position(|&byte| byte != 0)
+        .unwrap_or(magnitude.len());
+    let magnitude = &magnitude[first_non_zero..];
+    if magnitude.is_empty() {
+        return vec![0];
     }
 
-    bytes[start..].to_vec()
+    if !is_negative {
+        let mut bytes = magnitude.to_vec();
+        if bytes[0] & 0x80 != 0 {
+            bytes.insert(0, 0x00);
+        }
+        return bytes;
+    }
+
+    let fits_in_current_width = magnitude[0] < 0x80
+        || (magnitude[0] == 0x80 && magnitude[1..].iter().all(|&byte| byte == 0));
+    let width = if fits_in_current_width {
+        magnitude.len()
+    } else {
+        magnitude.len() + 1
+    };
+
+    let mut bytes = vec![0u8; width];
+    bytes[width - magnitude.len()..].copy_from_slice(magnitude);
+    for byte in &mut bytes {
+        *byte = !*byte;
+    }
+
+    let mut carry = 1u16;
+    for byte in bytes.iter_mut().rev() {
+        let sum = *byte as u16 + carry;
+        *byte = sum as u8;
+        carry = sum >> 8;
+    }
+
+    while bytes.len() > 1 && bytes[0] == 0xFF && (bytes[1] & 0x80) != 0 {
+        bytes.remove(0);
+    }
+
+    bytes
+}
+
+fn twos_complement_bytes_to_i64(bytes: &[u8]) -> Option<i64> {
+    if bytes.is_empty() {
+        return Some(0);
+    }
+    if bytes.len() > 8 {
+        return None;
+    }
+
+    let fill = if bytes[0] & 0x80 != 0 { 0xFF } else { 0x00 };
+    let mut expanded = [fill; 8];
+    expanded[8 - bytes.len()..].copy_from_slice(bytes);
+    Some(i64::from_be_bytes(expanded))
 }
 
 fn encode_decimal(
@@ -769,20 +867,36 @@ fn encode_decimal(
     exponent: i32,
     mantissa: &DecimalMantissa<'_>,
 ) -> Result<(), EncodeError> {
-    // Normalize: strip trailing zeros from mantissa, adjust exponent
-    let (norm_exp, norm_mantissa) = normalize_decimal(exponent, mantissa);
+    // Normalize: strip trailing zeros from mantissa, adjust exponent, and use
+    // the compact i64 wire form whenever the canonical mantissa fits in i64.
+    if !decimal_needs_canonicalization(exponent, mantissa) {
+        writer.write_signed_varint(exponent as i64);
+        match mantissa {
+            DecimalMantissa::I64(value) => {
+                writer.write_byte(0x00);
+                writer.write_signed_varint(*value);
+            }
+            DecimalMantissa::Big(bytes) => {
+                writer.write_byte(0x01);
+                writer.write_varint(bytes.len() as u64);
+                writer.write_bytes(bytes);
+            }
+        }
+        return Ok(());
+    }
 
+    let (norm_exp, norm_mantissa) = normalize_decimal_owned(exponent, mantissa);
     writer.write_signed_varint(norm_exp as i64);
 
-    match &norm_mantissa {
-        DecimalMantissa::I64(v) => {
+    match norm_mantissa {
+        DecimalMantissa::I64(value) => {
             writer.write_byte(0x00);
-            writer.write_signed_varint(*v);
+            writer.write_signed_varint(value);
         }
         DecimalMantissa::Big(bytes) => {
             writer.write_byte(0x01);
             writer.write_varint(bytes.len() as u64);
-            writer.write_bytes(bytes);
+            writer.write_bytes(bytes.as_ref());
         }
     }
 
@@ -1456,11 +1570,11 @@ mod tests {
         // Test negative numbers (two's complement)
         // -10 in two's complement (1 byte): 0xF6
         assert!(is_big_mantissa_divisible_by_10(&[0xF6])); // -10
-                                                           // -20 in two's complement (1 byte): 0xEC
+        // -20 in two's complement (1 byte): 0xEC
         assert!(is_big_mantissa_divisible_by_10(&[0xEC])); // -20
-                                                           // -1 in two's complement (1 byte): 0xFF
+        // -1 in two's complement (1 byte): 0xFF
         assert!(!is_big_mantissa_divisible_by_10(&[0xFF])); // -1
-                                                            // -7 in two's complement (1 byte): 0xF9
+        // -7 in two's complement (1 byte): 0xF9
         assert!(!is_big_mantissa_divisible_by_10(&[0xF9])); // -7
     }
 
@@ -1541,5 +1655,116 @@ mod tests {
         let mut dict_builder = DictionaryBuilder::new();
         let mut writer = Writer::new();
         assert!(encode_value(&mut writer, &valid_zero, &mut dict_builder).is_ok());
+    }
+
+    #[test]
+    fn test_decode_decimal_normalizes_large_big_mantissa_without_truncation() {
+        let dicts = WireDictionaries::default();
+        let large = vec![
+            0x0A, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00,
+        ];
+
+        let mut writer = Writer::new();
+        writer.write_signed_varint(0);
+        writer.write_byte(0x01);
+        writer.write_varint(large.len() as u64);
+        writer.write_bytes(&large);
+        writer.write_varint(0);
+
+        let mut reader = Reader::new(writer.as_bytes());
+        let decoded = decode_value(&mut reader, DataType::Decimal, &dicts).unwrap();
+
+        match decoded {
+            Value::Decimal {
+                exponent,
+                mantissa: DecimalMantissa::Big(bytes),
+                unit,
+            } => {
+                assert_eq!(exponent, 1);
+                assert_eq!(
+                    bytes.as_ref(),
+                    &[
+                        0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                        0x00, 0x00, 0x00, 0x00, 0x00
+                    ]
+                );
+                assert_eq!(unit, None);
+            }
+            other => panic!("expected large normalized Decimal, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_decode_decimal_keeps_borrowed_large_big_mantissa_when_already_canonical() {
+        let dicts = WireDictionaries::default();
+        let canonical = vec![
+            0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00,
+        ];
+
+        let mut writer = Writer::new();
+        writer.write_signed_varint(0);
+        writer.write_byte(0x01);
+        writer.write_varint(canonical.len() as u64);
+        writer.write_bytes(&canonical);
+        writer.write_varint(0);
+
+        let encoded = writer.as_bytes().to_vec();
+        let mut reader = Reader::new(&encoded);
+        let decoded = decode_value(&mut reader, DataType::Decimal, &dicts).unwrap();
+
+        match decoded {
+            Value::Decimal {
+                exponent,
+                mantissa: DecimalMantissa::Big(bytes),
+                unit,
+            } => {
+                assert_eq!(exponent, 0);
+                assert_eq!(bytes.as_ref(), canonical.as_slice());
+                assert!(matches!(bytes, Cow::Borrowed(_)));
+                assert_eq!(unit, None);
+            }
+            other => panic!("expected borrowed large Decimal, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_encode_decimal_normalizes_large_big_mantissa_without_truncation() {
+        let dicts = WireDictionaries::default();
+        let mut dict_builder = DictionaryBuilder::new();
+        let large = vec![
+            0x0A, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00,
+        ];
+        let value = Value::Decimal {
+            exponent: 0,
+            mantissa: DecimalMantissa::Big(Cow::Owned(large)),
+            unit: None,
+        };
+
+        let mut writer = Writer::new();
+        encode_value(&mut writer, &value, &mut dict_builder).unwrap();
+
+        let mut reader = Reader::new(writer.as_bytes());
+        let decoded = decode_value(&mut reader, DataType::Decimal, &dicts).unwrap();
+
+        match decoded {
+            Value::Decimal {
+                exponent,
+                mantissa: DecimalMantissa::Big(bytes),
+                ..
+            } => {
+                assert_eq!(exponent, 1);
+                assert_eq!(
+                    bytes.as_ref(),
+                    &[
+                        0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                        0x00, 0x00, 0x00, 0x00, 0x00
+                    ]
+                );
+            }
+            other => panic!("expected large normalized Decimal, got {other:?}"),
+        }
     }
 }
