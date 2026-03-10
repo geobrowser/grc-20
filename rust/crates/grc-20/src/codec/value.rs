@@ -23,6 +23,37 @@ use crate::util::{
 // =============================================================================
 
 const DECIMAL_EXPONENT_OUT_OF_RANGE: &str = "DECIMAL exponent outside int32 range";
+const DECIMAL_EMPTY_BIG_MANTISSA: &str = "DECIMAL mantissa bytes must not be empty";
+
+#[derive(Clone, Copy)]
+enum DecimalNormalizeError {
+    ExponentOutOfRange,
+    EmptyBigMantissa,
+}
+
+impl DecimalNormalizeError {
+    fn into_decode_error(self) -> DecodeError {
+        match self {
+            DecimalNormalizeError::ExponentOutOfRange => DecodeError::MalformedEncoding {
+                context: DECIMAL_EXPONENT_OUT_OF_RANGE,
+            },
+            DecimalNormalizeError::EmptyBigMantissa => DecodeError::MalformedEncoding {
+                context: DECIMAL_EMPTY_BIG_MANTISSA,
+            },
+        }
+    }
+
+    fn into_encode_error(self) -> EncodeError {
+        match self {
+            DecimalNormalizeError::ExponentOutOfRange => EncodeError::InvalidInput {
+                context: DECIMAL_EXPONENT_OUT_OF_RANGE,
+            },
+            DecimalNormalizeError::EmptyBigMantissa => EncodeError::InvalidInput {
+                context: DECIMAL_EMPTY_BIG_MANTISSA,
+            },
+        }
+    }
+}
 
 /// Decodes a Value from the reader based on the data type (zero-copy).
 pub fn decode_value<'a>(
@@ -179,7 +210,7 @@ fn decode_decimal<'a>(
 
 /// Checks if a big-endian two's complement mantissa represents zero.
 fn is_big_mantissa_zero(bytes: &[u8]) -> bool {
-    bytes.iter().all(|&b| b == 0)
+    !bytes.is_empty() && bytes.iter().all(|&b| b == 0)
 }
 
 fn has_redundant_sign_extension(bytes: &[u8]) -> bool {
@@ -714,26 +745,32 @@ fn decimal_needs_canonicalization(exponent: i32, mantissa: &DecimalMantissa<'_>)
 fn normalize_decimal_owned(
     exponent: i32,
     mantissa: &DecimalMantissa<'_>,
-) -> Option<(i32, DecimalMantissa<'static>)> {
+) -> Result<(i32, DecimalMantissa<'static>), DecimalNormalizeError> {
     match mantissa {
         DecimalMantissa::I64(v) => {
             let mut value = *v;
             let mut exp = exponent;
 
             if value == 0 {
-                return Some((0, DecimalMantissa::I64(0)));
+                return Ok((0, DecimalMantissa::I64(0)));
             }
 
             while value != 0 && value % 10 == 0 {
                 value /= 10;
-                exp = exp.checked_add(1)?;
+                exp = exp
+                    .checked_add(1)
+                    .ok_or(DecimalNormalizeError::ExponentOutOfRange)?;
             }
 
-            Some((exp, DecimalMantissa::I64(value)))
+            Ok((exp, DecimalMantissa::I64(value)))
         }
         DecimalMantissa::Big(bytes) => {
+            if bytes.is_empty() {
+                return Err(DecimalNormalizeError::EmptyBigMantissa);
+            }
+
             if is_big_mantissa_zero(bytes) {
-                return Some((0, DecimalMantissa::I64(0)));
+                return Ok((0, DecimalMantissa::I64(0)));
             }
 
             let is_negative = bytes[0] & 0x80 != 0;
@@ -746,14 +783,16 @@ fn normalize_decimal_owned(
                     break;
                 }
                 magnitude = quotient;
-                exp = exp.checked_add(1)?;
+                exp = exp
+                    .checked_add(1)
+                    .ok_or(DecimalNormalizeError::ExponentOutOfRange)?;
             }
 
             let canonical_bytes = signed_bytes_from_magnitude(is_negative, &magnitude);
             if let Some(value) = twos_complement_bytes_to_i64(&canonical_bytes) {
-                Some((exp, DecimalMantissa::I64(value)))
+                Ok((exp, DecimalMantissa::I64(value)))
             } else {
-                Some((exp, DecimalMantissa::Big(Cow::Owned(canonical_bytes))))
+                Ok((exp, DecimalMantissa::Big(Cow::Owned(canonical_bytes))))
             }
         }
     }
@@ -767,10 +806,8 @@ fn normalize_decimal_for_decode<'a>(
         return Ok((exponent, mantissa));
     }
 
-    let (exp, canonical) =
-        normalize_decimal_owned(exponent, &mantissa).ok_or(DecodeError::MalformedEncoding {
-            context: DECIMAL_EXPONENT_OUT_OF_RANGE,
-        })?;
+    let (exp, canonical) = normalize_decimal_owned(exponent, &mantissa)
+        .map_err(DecimalNormalizeError::into_decode_error)?;
     match canonical {
         DecimalMantissa::I64(value) => Ok((exp, DecimalMantissa::I64(value))),
         DecimalMantissa::Big(bytes) => {
@@ -912,9 +949,7 @@ fn encode_decimal(
     }
 
     let (norm_exp, norm_mantissa) =
-        normalize_decimal_owned(exponent, mantissa).ok_or(EncodeError::InvalidInput {
-            context: DECIMAL_EXPONENT_OUT_OF_RANGE,
-        })?;
+        normalize_decimal_owned(exponent, mantissa).map_err(DecimalNormalizeError::into_encode_error)?;
     writer.write_signed_varint(norm_exp as i64);
 
     match norm_mantissa {
@@ -1578,7 +1613,7 @@ mod tests {
     #[test]
     fn test_big_decimal_normalization_helpers() {
         // Test is_big_mantissa_zero
-        assert!(is_big_mantissa_zero(&[]));
+        assert!(!is_big_mantissa_zero(&[]));
         assert!(is_big_mantissa_zero(&[0]));
         assert!(is_big_mantissa_zero(&[0, 0, 0]));
         assert!(!is_big_mantissa_zero(&[1]));
@@ -1901,6 +1936,25 @@ mod tests {
             err,
             EncodeError::InvalidInput {
                 context: DECIMAL_EXPONENT_OUT_OF_RANGE,
+            }
+        );
+    }
+
+    #[test]
+    fn test_encode_decimal_rejects_empty_big_mantissa_bytes() {
+        let value = Value::Decimal {
+            exponent: 0,
+            mantissa: DecimalMantissa::Big(Cow::Owned(Vec::new())),
+            unit: None,
+        };
+
+        let mut dict_builder = DictionaryBuilder::new();
+        let mut writer = Writer::new();
+        let err = encode_value(&mut writer, &value, &mut dict_builder).unwrap_err();
+        assert_eq!(
+            err,
+            EncodeError::InvalidInput {
+                context: DECIMAL_EMPTY_BIG_MANTISSA,
             }
         );
     }

@@ -15,6 +15,7 @@ const MIN_I32 = -2147483648;
 const MAX_I32 = 2147483647;
 const MAX_BYTES_LEN = 64 * 1024 * 1024;
 const DECIMAL_EXPONENT_OUT_OF_RANGE = "DECIMAL exponent outside int32 range";
+const DECIMAL_EMPTY_BIG_MANTISSA = "DECIMAL mantissa bytes must not be empty";
 
 /**
  * Dictionary builder for tracking property/language/unit indices.
@@ -188,12 +189,16 @@ function normalizeDecimal(
     return { exponent: exp, mantissa: { type: "i64", value } };
   } else {
     const bytes = mantissa.bytes;
+    if (bytes.length === 0) {
+      throw decimalEmptyBigMantissaError(mode);
+    }
 
-    if (isBigMantissaZero(bytes)) {
+    const isZero = isBigMantissaZero(bytes);
+    if (isZero) {
       return { exponent: 0, mantissa: { type: "i64", value: 0n } };
     }
 
-    if (!bigMantissaNeedsCanonicalization(bytes)) {
+    if (!bigMantissaNeedsCanonicalization(bytes, isZero)) {
       return { exponent, mantissa };
     }
 
@@ -238,6 +243,12 @@ function decimalExponentError(mode: "encode" | "decode"): Error {
     : new Error(DECIMAL_EXPONENT_OUT_OF_RANGE);
 }
 
+function decimalEmptyBigMantissaError(mode: "encode" | "decode"): Error {
+  return mode === "decode"
+    ? new DecodeError("E005", DECIMAL_EMPTY_BIG_MANTISSA)
+    : new Error(DECIMAL_EMPTY_BIG_MANTISSA);
+}
+
 function readDecimalExponent(reader: Reader): number {
   const exponent = reader.readSignedVarint();
   if (exponent < BigInt(MIN_I32) || exponent > BigInt(MAX_I32)) {
@@ -247,7 +258,7 @@ function readDecimalExponent(reader: Reader): number {
 }
 
 function isBigMantissaZero(bytes: Uint8Array): boolean {
-  return bytes.every((byte) => byte === 0);
+  return bytes.length > 0 && bytes.every((byte) => byte === 0);
 }
 
 function hasRedundantSignExtension(bytes: Uint8Array): boolean {
@@ -270,9 +281,9 @@ function trimTwosComplement(bytes: Uint8Array): Uint8Array {
   return start === 0 ? bytes : bytes.slice(start);
 }
 
-function bigMantissaNeedsCanonicalization(bytes: Uint8Array): boolean {
+function bigMantissaNeedsCanonicalization(bytes: Uint8Array, isZero: boolean = isBigMantissaZero(bytes)): boolean {
   return hasRedundantSignExtension(bytes)
-    || isBigMantissaZero(bytes)
+    || isZero
     || isBigMantissaDivisibleBy10(bytes)
     || twosComplementBytesToI64(bytes) !== null;
 }

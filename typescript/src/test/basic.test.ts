@@ -1561,11 +1561,21 @@ describe("Codec", () => {
       writer.writeSignedVarint(0n);
       writer.writeByte(0x01);
       writer.writeLengthPrefixedBytes(new Uint8Array([]));
-  
+
       expect(() => decodeValuePayload(new Reader(writer.finish()), DataType.Decimal))
         .toThrow("decimal mantissa bytes are not minimal");
     });
-  
+
+    it("rejects empty big mantissa bytes on encode", () => {
+      const writer = new Writer();
+
+      expect(() => encodeValuePayload(writer, {
+        type: "decimal",
+        exponent: 0,
+        mantissa: { type: "big", bytes: new Uint8Array([]) },
+      })).toThrow("DECIMAL mantissa bytes must not be empty");
+    });
+
     it("rejects exponents outside int32 range on decode", () => {
       const writer = new Writer();
       writer.writeSignedVarint(2147483648n);
