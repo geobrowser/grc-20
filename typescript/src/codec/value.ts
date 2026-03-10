@@ -11,6 +11,11 @@ import {
   formatDatetimeRfc3339,
 } from "../util/datetime.js";
 
+const MIN_I32 = -2147483648;
+const MAX_I32 = 2147483647;
+const MAX_BYTES_LEN = 64 * 1024 * 1024;
+const DECIMAL_EXPONENT_OUT_OF_RANGE = "DECIMAL exponent outside int32 range";
+
 /**
  * Dictionary builder for tracking property/language/unit indices.
  */
@@ -160,8 +165,11 @@ export function encodeValuePayload(writer: Writer, value: Value): void {
  */
 function normalizeDecimal(
   exponent: number,
-  mantissa: DecimalMantissa
+  mantissa: DecimalMantissa,
+  mode: "encode" | "decode"
 ): { exponent: number; mantissa: DecimalMantissa } {
+  ensureDecimalExponent(exponent, mode);
+
   if (mantissa.type === "i64") {
     let value = mantissa.value;
     let exp = exponent;
@@ -174,7 +182,7 @@ function normalizeDecimal(
     // Strip trailing zeros
     while (value !== 0n && value % 10n === 0n) {
       value = value / 10n;
-      exp += 1;
+      exp = incrementDecimalExponent(exp, mode);
     }
 
     return { exponent: exp, mantissa: { type: "i64", value } };
@@ -198,7 +206,7 @@ function normalizeDecimal(
         break;
       }
       magnitude = quotient;
-      exp += 1;
+      exp = incrementDecimalExponent(exp, mode);
     }
 
     const canonicalBytes = signedBytesFromMagnitude(isNegative, magnitude);
@@ -209,6 +217,33 @@ function normalizeDecimal(
 
     return { exponent: exp, mantissa: { type: "big", bytes: canonicalBytes } };
   }
+}
+
+function ensureDecimalExponent(exponent: number, mode: "encode" | "decode"): void {
+  if (!Number.isInteger(exponent) || exponent < MIN_I32 || exponent > MAX_I32) {
+    throw decimalExponentError(mode);
+  }
+}
+
+function incrementDecimalExponent(exponent: number, mode: "encode" | "decode"): number {
+  if (exponent === MAX_I32) {
+    throw decimalExponentError(mode);
+  }
+  return exponent + 1;
+}
+
+function decimalExponentError(mode: "encode" | "decode"): Error {
+  return mode === "decode"
+    ? new DecodeError("E005", DECIMAL_EXPONENT_OUT_OF_RANGE)
+    : new Error(DECIMAL_EXPONENT_OUT_OF_RANGE);
+}
+
+function readDecimalExponent(reader: Reader): number {
+  const exponent = reader.readSignedVarint();
+  if (exponent < BigInt(MIN_I32) || exponent > BigInt(MAX_I32)) {
+    throw decimalExponentError("decode");
+  }
+  return Number(exponent);
 }
 
 function isBigMantissaZero(bytes: Uint8Array): boolean {
@@ -382,7 +417,7 @@ function twosComplementBytesToI64(bytes: Uint8Array): bigint | null {
  * to ensure trailing zeros are stripped.
  */
 function encodeDecimal(writer: Writer, exponent: number, mantissa: DecimalMantissa): void {
-  const normalized = normalizeDecimal(exponent, mantissa);
+  const normalized = normalizeDecimal(exponent, mantissa, "encode");
 
   writer.writeSignedVarint(BigInt(normalized.exponent));
 
@@ -450,13 +485,17 @@ export function decodeValuePayload(reader: Reader, dataType: DataType): Value {
     }
 
     case DataType.Decimal: {
-      const exponent = Number(reader.readSignedVarint());
+      const exponent = readDecimalExponent(reader);
       const mantissaType = reader.readByte();
       let mantissa: DecimalMantissa;
       if (mantissaType === 0x00) {
         mantissa = { type: "i64", value: reader.readSignedVarint() };
       } else if (mantissaType === 0x01) {
-        const bytes = reader.readLengthPrefixedBytes();
+        const len = reader.readVarintNumber();
+        if (len > MAX_BYTES_LEN) {
+          throw new DecodeError("E005", `decimal mantissa length ${len} exceeds maximum ${MAX_BYTES_LEN}`);
+        }
+        const bytes = new Uint8Array(reader.readBytes(len));
         if (bytes.length === 0 || hasRedundantSignExtension(bytes)) {
           throw new DecodeError("E005", "decimal mantissa bytes are not minimal");
         }
@@ -464,7 +503,7 @@ export function decodeValuePayload(reader: Reader, dataType: DataType): Value {
       } else {
         throw new DecodeError("E005", `invalid decimal mantissa type: ${mantissaType}`);
       }
-      return { type: "decimal", ...normalizeDecimal(exponent, mantissa) };
+      return { type: "decimal", ...normalizeDecimal(exponent, mantissa, "decode") };
     }
 
     case DataType.Text: {

@@ -1260,498 +1260,538 @@ describe("Codec", () => {
     expect(() => encodeEdit(edit)).toThrow("Invalid RFC 3339 time");
   });
 
-describe("Decimal normalization", () => {
-  it("normalizes i64 mantissa with trailing zeros", () => {
-    const editId = randomId();
-    const entityId = randomId();
-    const propId = randomId();
-
-    // mantissa 100, exponent -2 represents 1.00 — should normalize to mantissa 1, exponent 0
-    const edit: Edit = {
-      id: editId,
-      name: "Decimal Test",
-      authors: [],
-      createdAt: 0n,
-      ops: [
-        {
-          type: "createEntity",
-          id: entityId,
-          values: [
-            { property: propId, value: { type: "decimal", exponent: -2, mantissa: { type: "i64", value: 100n } } },
-          ],
-        },
-      ],
-    };
-
-    const encoded = encodeEdit(edit);
-    const decoded = decodeEdit(encoded);
-
-    const op = decoded.ops[0];
-    expect(op.type).toBe("createEntity");
-    if (op.type === "createEntity") {
-      const val = op.values[0].value;
-      expect(val.type).toBe("decimal");
-      if (val.type === "decimal") {
-        // Should be normalized: 100 * 10^-2 = 1 * 10^0
-        expect(val.mantissa).toEqual({ type: "i64", value: 1n });
-        expect(val.exponent).toBe(0);
-      }
-    }
-  });
-
-  it("normalizes i64 mantissa 1230 with exponent -2", () => {
-    const editId = randomId();
-    const entityId = randomId();
-    const propId = randomId();
-
-    const edit: Edit = {
-      id: editId,
-      name: "Decimal Test",
-      authors: [],
-      createdAt: 0n,
-      ops: [
-        {
-          type: "createEntity",
-          id: entityId,
-          values: [
-            { property: propId, value: { type: "decimal", exponent: -2, mantissa: { type: "i64", value: 1230n } } },
-          ],
-        },
-      ],
-    };
-
-    const encoded = encodeEdit(edit);
-    const decoded = decodeEdit(encoded);
-
-    const op = decoded.ops[0];
-    if (op.type === "createEntity") {
-      const val = op.values[0].value;
-      if (val.type === "decimal") {
-        // 1230 * 10^-2 = 123 * 10^-1
-        expect(val.mantissa).toEqual({ type: "i64", value: 123n });
-        expect(val.exponent).toBe(-1);
-      }
-    }
-  });
-
-  it("normalizes zero mantissa with non-zero exponent", () => {
-    const editId = randomId();
-    const entityId = randomId();
-    const propId = randomId();
-
-    const edit: Edit = {
-      id: editId,
-      name: "Decimal Test",
-      authors: [],
-      createdAt: 0n,
-      ops: [
-        {
-          type: "createEntity",
-          id: entityId,
-          values: [
-            { property: propId, value: { type: "decimal", exponent: 5, mantissa: { type: "i64", value: 0n } } },
-          ],
-        },
-      ],
-    };
-
-    const encoded = encodeEdit(edit);
-    const decoded = decodeEdit(encoded);
-
-    const op = decoded.ops[0];
-    if (op.type === "createEntity") {
-      const val = op.values[0].value;
-      if (val.type === "decimal") {
-        expect(val.mantissa).toEqual({ type: "i64", value: 0n });
-        expect(val.exponent).toBe(0);
-      }
-    }
-  });
-
-  it("does not modify already-normalized decimals", () => {
-    const editId = randomId();
-    const entityId = randomId();
-    const propId = randomId();
-
-    const edit: Edit = {
-      id: editId,
-      name: "Decimal Test",
-      authors: [],
-      createdAt: 0n,
-      ops: [
-        {
-          type: "createEntity",
-          id: entityId,
-          values: [
-            { property: propId, value: { type: "decimal", exponent: -2, mantissa: { type: "i64", value: 12345n } } },
-          ],
-        },
-      ],
-    };
-
-    const encoded = encodeEdit(edit);
-    const decoded = decodeEdit(encoded);
-
-    const op = decoded.ops[0];
-    if (op.type === "createEntity") {
-      const val = op.values[0].value;
-      if (val.type === "decimal") {
-        expect(val.mantissa).toEqual({ type: "i64", value: 12345n });
-        expect(val.exponent).toBe(-2);
-      }
-    }
-  });
-
-  it("normalizes negative mantissa with trailing zeros", () => {
-    const editId = randomId();
-    const entityId = randomId();
-    const propId = randomId();
-
-    const edit: Edit = {
-      id: editId,
-      name: "Decimal Test",
-      authors: [],
-      createdAt: 0n,
-      ops: [
-        {
-          type: "createEntity",
-          id: entityId,
-          values: [
-            { property: propId, value: { type: "decimal", exponent: 0, mantissa: { type: "i64", value: -500n } } },
-          ],
-        },
-      ],
-    };
-
-    const encoded = encodeEdit(edit);
-    const decoded = decodeEdit(encoded);
-
-    const op = decoded.ops[0];
-    if (op.type === "createEntity") {
-      const val = op.values[0].value;
-      if (val.type === "decimal") {
-        // -500 * 10^0 = -5 * 10^2
-        expect(val.mantissa).toEqual({ type: "i64", value: -5n });
-        expect(val.exponent).toBe(2);
-      }
-    }
-  });
-
-  it("normalizes big mantissa with trailing zeros", () => {
-    const editId = randomId();
-    const entityId = randomId();
-    const propId = randomId();
-
-    // Big-endian two's complement for 500: 0x01F4
-    const bigBytes = new Uint8Array([0x01, 0xF4]);
-
-    const edit: Edit = {
-      id: editId,
-      name: "Decimal Test",
-      authors: [],
-      createdAt: 0n,
-      ops: [
-        {
-          type: "createEntity",
-          id: entityId,
-          values: [
-            { property: propId, value: { type: "decimal", exponent: 0, mantissa: { type: "big", bytes: bigBytes } } },
-          ],
-        },
-      ],
-    };
-
-    const encoded = encodeEdit(edit);
-    const decoded = decodeEdit(encoded);
-
-    const op = decoded.ops[0];
-    if (op.type === "createEntity") {
-      const val = op.values[0].value;
-      if (val.type === "decimal") {
-        // 500 * 10^0 = 5 * 10^2, and 5 fits in i64
-        expect(val.mantissa).toEqual({ type: "i64", value: 5n });
-        expect(val.exponent).toBe(2);
-      }
-    }
-  });
-
-  it("normalizes raw decoded decimals so TypeScript matches Rust", () => {
-    const writer = new Writer();
-    writer.writeSignedVarint(-2n);
-    writer.writeByte(0x00);
-    writer.writeSignedVarint(100n);
-
-    const decoded = decodeValuePayload(new Reader(writer.finish()), DataType.Decimal);
-    expect(decoded).toEqual({
-      type: "decimal",
-      exponent: 0,
-      mantissa: { type: "i64", value: 1n },
-    });
-  });
-
-  it("normalizes raw decoded large big mantissas without truncation", () => {
-    const large = new Uint8Array([0x0A, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-      0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]);
-    const writer = new Writer();
-    writer.writeSignedVarint(0n);
-    writer.writeByte(0x01);
-    writer.writeLengthPrefixedBytes(large);
-
-    const decoded = decodeValuePayload(new Reader(writer.finish()), DataType.Decimal);
-    expect(decoded).toEqual({
-      type: "decimal",
-      exponent: 1,
-      mantissa: {
-        type: "big",
-        bytes: new Uint8Array([0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-          0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]),
-      },
-    });
-  });
-
-  it("keeps negative big power-of-two mantissas minimally encoded", () => {
-    const writer = new Writer();
-    encodeValuePayload(writer, {
-      type: "decimal",
-      exponent: 0,
-      mantissa: {
-        type: "big",
-        bytes: new Uint8Array([0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]),
-      },
-    });
-
-    const reader = new Reader(writer.finish());
-    expect(reader.readSignedVarint()).toBe(0n);
-    expect(reader.readByte()).toBe(0x01);
-    const encodedBytes = reader.readLengthPrefixedBytes();
-    expect(encodedBytes).toEqual(new Uint8Array([0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]));
-  });
-
-  it("re-encodes non-minimal big mantissas to canonical bytes", () => {
-    const writer = new Writer();
-    encodeValuePayload(writer, {
-      type: "decimal",
-      exponent: 0,
-      mantissa: {
-        type: "big",
-        bytes: new Uint8Array([0x00, 0x01, 0x23, 0x45, 0x67, 0x89, 0xAB, 0xCD, 0xEF, 0x01]),
-      },
-    });
-
-    const reader = new Reader(writer.finish());
-    expect(reader.readSignedVarint()).toBe(0n);
-    expect(reader.readByte()).toBe(0x01);
-    expect(reader.readLengthPrefixedBytes()).toEqual(
-      new Uint8Array([0x01, 0x23, 0x45, 0x67, 0x89, 0xAB, 0xCD, 0xEF, 0x01])
-    );
-  });
-
-  it("rejects non-minimal decimal mantissa bytes on decode", () => {
-    const writer = new Writer();
-    writer.writeSignedVarint(0n);
-    writer.writeByte(0x01);
-    writer.writeLengthPrefixedBytes(new Uint8Array([0x00, 0x7F]));
-
-    expect(() => decodeValuePayload(new Reader(writer.finish()), DataType.Decimal))
-      .toThrow("decimal mantissa bytes are not minimal");
-  });
-
-  it("rejects empty big mantissa bytes on decode", () => {
-    const writer = new Writer();
-    writer.writeSignedVarint(0n);
-    writer.writeByte(0x01);
-    writer.writeLengthPrefixedBytes(new Uint8Array([]));
-
-    expect(() => decodeValuePayload(new Reader(writer.finish()), DataType.Decimal))
-      .toThrow("decimal mantissa bytes are not minimal");
-  });
-});
-
-describe("Compression", () => {
-  it("isCompressed detects GRC2Z magic", () => {
-    const compressed = new Uint8Array([0x47, 0x52, 0x43, 0x32, 0x5a, 0x00]); // "GRC2Z" + data
-    const uncompressed = new Uint8Array([0x47, 0x52, 0x43, 0x32, 0x00]); // "GRC2" + data
-
-    expect(isCompressed(compressed)).toBe(true);
-    expect(isCompressed(uncompressed)).toBe(false);
-  });
-
-  it("isCompressed returns false for short data", () => {
-    expect(isCompressed(new Uint8Array([0x47, 0x52, 0x43, 0x32]))).toBe(false);
-    expect(isCompressed(new Uint8Array([]))).toBe(false);
-  });
-
-  it("encodes and decodes compressed edit", async () => {
-    const editId = randomId();
-    const entityId = randomId();
-
-    const edit = new EditBuilder(editId)
-      .setName("Compressed Test")
-      .setCreatedAt(1234567890000000n)
-      .createEntity(entityId, (e) =>
-        e.text(properties.name(), "Alice", undefined)
-         .text(properties.description(), "A person named Alice with a long description to make compression worthwhile", undefined)
-      )
-      .build();
-
-    const compressed = await encodeEditCompressed(edit);
-
-    // Check magic bytes
-    expect(String.fromCharCode(...compressed.slice(0, 5))).toBe("GRC2Z");
-
-    // Verify it's detected as compressed
-    expect(isCompressed(compressed)).toBe(true);
-
-    // Decode and verify
-    const decoded = await decodeEditCompressed(compressed);
-
-    expect(idsEqual(decoded.id, edit.id)).toBe(true);
-    expect(decoded.name).toBe(edit.name);
-    expect(decoded.createdAt).toBe(edit.createdAt);
-    expect(decoded.ops.length).toBe(edit.ops.length);
-  });
-
-  it("compressed data is smaller than uncompressed for larger edits", async () => {
-    const editId = randomId();
-
-    // Create an edit with repetitive data (good for compression)
-    const builder = new EditBuilder(editId).setName("Large Test");
-
-    for (let i = 0; i < 50; i++) {
+  describe("Decimal normalization", () => {
+    it("normalizes i64 mantissa with trailing zeros", () => {
+      const editId = randomId();
       const entityId = randomId();
-      builder.createEntity(entityId, (e) =>
-        e.text(properties.name(), `Entity number ${i} with some padding text`, undefined)
-         .text(properties.description(), "This is a repeated description that should compress well", undefined)
-      );
-    }
-
-    const edit = builder.build();
-
-    const uncompressed = encodeEdit(edit);
-    const compressed = await encodeEditCompressed(edit);
-
-    // Compressed should be smaller
-    expect(compressed.length).toBeLessThan(uncompressed.length);
-  });
-
-  it("decodeEditAuto handles both formats", async () => {
-    const editId = randomId();
-    const entityId = randomId();
-
-    const edit = new EditBuilder(editId)
-      .setName("Auto Test")
-      .createEntity(entityId, (e) =>
-        e.text(properties.name(), "Test", undefined)
-      )
-      .build();
-
-    const uncompressed = encodeEdit(edit);
-    const compressed = await encodeEditCompressed(edit);
-
-    // Should decode both formats
-    const decoded1 = await decodeEditAuto(uncompressed);
-    const decoded2 = await decodeEditAuto(compressed);
-
-    expect(idsEqual(decoded1.id, edit.id)).toBe(true);
-    expect(idsEqual(decoded2.id, edit.id)).toBe(true);
-    expect(decoded1.name).toBe(edit.name);
-    expect(decoded2.name).toBe(edit.name);
-  });
-
-  it("compressed canonical encoding roundtrips", async () => {
-    const editId = parseId("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")!;
-    const entityId = parseId("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")!;
-
-    const edit = new EditBuilder(editId)
-      .setName("Canonical Compressed Test")
-      .setCreatedAt(1000000n)
-      .createEntity(entityId, (e) =>
-        e.text(properties.name(), "Test", undefined)
-      )
-      .build();
-
-    const compressed = await encodeEditCompressed(edit, { canonical: true });
-    const decoded = await decodeEditCompressed(compressed);
-
-    expect(idsEqual(decoded.id, edit.id)).toBe(true);
-    expect(decoded.name).toBe(edit.name);
-  });
-
-  it("preloadCompression loads WASM", async () => {
-    // After preloading, compression should be ready
-    await preloadCompression();
-    expect(isCompressionReady()).toBe(true);
-  });
-
-  it("encodeEditAuto returns uncompressed for small edits", async () => {
-    const editId = randomId();
-    const entityId = randomId();
-
-    // Create a small edit
-    const edit = new EditBuilder(editId)
-      .setName("Small")
-      .createEmptyEntity(entityId)
-      .build();
-
-    // With default threshold, small edits should not be compressed
-    const encoded = await encodeEditAuto(edit);
-
-    // Should have GRC2 magic (uncompressed)
-    expect(String.fromCharCode(...encoded.slice(0, 4))).toBe("GRC2");
-    expect(isCompressed(encoded)).toBe(false);
-
-    // Should decode correctly
-    const decoded = await decodeEditAuto(encoded);
-    expect(idsEqual(decoded.id, edit.id)).toBe(true);
-  });
-
-  it("encodeEditAuto compresses large edits", async () => {
-    const editId = randomId();
-
-    // Create a large edit
-    const builder = new EditBuilder(editId).setName("Large Auto Test");
-    for (let i = 0; i < 20; i++) {
+      const propId = randomId();
+  
+      // mantissa 100, exponent -2 represents 1.00 — should normalize to mantissa 1, exponent 0
+      const edit: Edit = {
+        id: editId,
+        name: "Decimal Test",
+        authors: [],
+        createdAt: 0n,
+        ops: [
+          {
+            type: "createEntity",
+            id: entityId,
+            values: [
+              { property: propId, value: { type: "decimal", exponent: -2, mantissa: { type: "i64", value: 100n } } },
+            ],
+          },
+        ],
+      };
+  
+      const encoded = encodeEdit(edit);
+      const decoded = decodeEdit(encoded);
+  
+      const op = decoded.ops[0];
+      expect(op.type).toBe("createEntity");
+      if (op.type === "createEntity") {
+        const val = op.values[0].value;
+        expect(val.type).toBe("decimal");
+        if (val.type === "decimal") {
+          // Should be normalized: 100 * 10^-2 = 1 * 10^0
+          expect(val.mantissa).toEqual({ type: "i64", value: 1n });
+          expect(val.exponent).toBe(0);
+        }
+      }
+    });
+  
+    it("normalizes i64 mantissa 1230 with exponent -2", () => {
+      const editId = randomId();
       const entityId = randomId();
-      builder.createEntity(entityId, (e) =>
-        e.text(properties.name(), `Entity ${i} with padding`, undefined)
-         .text(properties.description(), "Repeated description for compression", undefined)
+      const propId = randomId();
+  
+      const edit: Edit = {
+        id: editId,
+        name: "Decimal Test",
+        authors: [],
+        createdAt: 0n,
+        ops: [
+          {
+            type: "createEntity",
+            id: entityId,
+            values: [
+              { property: propId, value: { type: "decimal", exponent: -2, mantissa: { type: "i64", value: 1230n } } },
+            ],
+          },
+        ],
+      };
+  
+      const encoded = encodeEdit(edit);
+      const decoded = decodeEdit(encoded);
+  
+      const op = decoded.ops[0];
+      if (op.type === "createEntity") {
+        const val = op.values[0].value;
+        if (val.type === "decimal") {
+          // 1230 * 10^-2 = 123 * 10^-1
+          expect(val.mantissa).toEqual({ type: "i64", value: 123n });
+          expect(val.exponent).toBe(-1);
+        }
+      }
+    });
+  
+    it("normalizes zero mantissa with non-zero exponent", () => {
+      const editId = randomId();
+      const entityId = randomId();
+      const propId = randomId();
+  
+      const edit: Edit = {
+        id: editId,
+        name: "Decimal Test",
+        authors: [],
+        createdAt: 0n,
+        ops: [
+          {
+            type: "createEntity",
+            id: entityId,
+            values: [
+              { property: propId, value: { type: "decimal", exponent: 5, mantissa: { type: "i64", value: 0n } } },
+            ],
+          },
+        ],
+      };
+  
+      const encoded = encodeEdit(edit);
+      const decoded = decodeEdit(encoded);
+  
+      const op = decoded.ops[0];
+      if (op.type === "createEntity") {
+        const val = op.values[0].value;
+        if (val.type === "decimal") {
+          expect(val.mantissa).toEqual({ type: "i64", value: 0n });
+          expect(val.exponent).toBe(0);
+        }
+      }
+    });
+  
+    it("does not modify already-normalized decimals", () => {
+      const editId = randomId();
+      const entityId = randomId();
+      const propId = randomId();
+  
+      const edit: Edit = {
+        id: editId,
+        name: "Decimal Test",
+        authors: [],
+        createdAt: 0n,
+        ops: [
+          {
+            type: "createEntity",
+            id: entityId,
+            values: [
+              { property: propId, value: { type: "decimal", exponent: -2, mantissa: { type: "i64", value: 12345n } } },
+            ],
+          },
+        ],
+      };
+  
+      const encoded = encodeEdit(edit);
+      const decoded = decodeEdit(encoded);
+  
+      const op = decoded.ops[0];
+      if (op.type === "createEntity") {
+        const val = op.values[0].value;
+        if (val.type === "decimal") {
+          expect(val.mantissa).toEqual({ type: "i64", value: 12345n });
+          expect(val.exponent).toBe(-2);
+        }
+      }
+    });
+  
+    it("normalizes negative mantissa with trailing zeros", () => {
+      const editId = randomId();
+      const entityId = randomId();
+      const propId = randomId();
+  
+      const edit: Edit = {
+        id: editId,
+        name: "Decimal Test",
+        authors: [],
+        createdAt: 0n,
+        ops: [
+          {
+            type: "createEntity",
+            id: entityId,
+            values: [
+              { property: propId, value: { type: "decimal", exponent: 0, mantissa: { type: "i64", value: -500n } } },
+            ],
+          },
+        ],
+      };
+  
+      const encoded = encodeEdit(edit);
+      const decoded = decodeEdit(encoded);
+  
+      const op = decoded.ops[0];
+      if (op.type === "createEntity") {
+        const val = op.values[0].value;
+        if (val.type === "decimal") {
+          // -500 * 10^0 = -5 * 10^2
+          expect(val.mantissa).toEqual({ type: "i64", value: -5n });
+          expect(val.exponent).toBe(2);
+        }
+      }
+    });
+  
+    it("normalizes big mantissa with trailing zeros", () => {
+      const editId = randomId();
+      const entityId = randomId();
+      const propId = randomId();
+  
+      // Big-endian two's complement for 500: 0x01F4
+      const bigBytes = new Uint8Array([0x01, 0xF4]);
+  
+      const edit: Edit = {
+        id: editId,
+        name: "Decimal Test",
+        authors: [],
+        createdAt: 0n,
+        ops: [
+          {
+            type: "createEntity",
+            id: entityId,
+            values: [
+              { property: propId, value: { type: "decimal", exponent: 0, mantissa: { type: "big", bytes: bigBytes } } },
+            ],
+          },
+        ],
+      };
+  
+      const encoded = encodeEdit(edit);
+      const decoded = decodeEdit(encoded);
+  
+      const op = decoded.ops[0];
+      if (op.type === "createEntity") {
+        const val = op.values[0].value;
+        if (val.type === "decimal") {
+          // 500 * 10^0 = 5 * 10^2, and 5 fits in i64
+          expect(val.mantissa).toEqual({ type: "i64", value: 5n });
+          expect(val.exponent).toBe(2);
+        }
+      }
+    });
+  
+    it("normalizes raw decoded decimals so TypeScript matches Rust", () => {
+      const writer = new Writer();
+      writer.writeSignedVarint(-2n);
+      writer.writeByte(0x00);
+      writer.writeSignedVarint(100n);
+  
+      const decoded = decodeValuePayload(new Reader(writer.finish()), DataType.Decimal);
+      expect(decoded).toEqual({
+        type: "decimal",
+        exponent: 0,
+        mantissa: { type: "i64", value: 1n },
+      });
+    });
+  
+    it("normalizes raw decoded large big mantissas without truncation", () => {
+      const large = new Uint8Array([0x0A, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]);
+      const writer = new Writer();
+      writer.writeSignedVarint(0n);
+      writer.writeByte(0x01);
+      writer.writeLengthPrefixedBytes(large);
+  
+      const decoded = decodeValuePayload(new Reader(writer.finish()), DataType.Decimal);
+      expect(decoded).toEqual({
+        type: "decimal",
+        exponent: 1,
+        mantissa: {
+          type: "big",
+          bytes: new Uint8Array([0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]),
+        },
+      });
+    });
+  
+    it("keeps negative big power-of-two mantissas minimally encoded", () => {
+      const writer = new Writer();
+      encodeValuePayload(writer, {
+        type: "decimal",
+        exponent: 0,
+        mantissa: {
+          type: "big",
+          bytes: new Uint8Array([0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]),
+        },
+      });
+  
+      const reader = new Reader(writer.finish());
+      expect(reader.readSignedVarint()).toBe(0n);
+      expect(reader.readByte()).toBe(0x01);
+      const encodedBytes = reader.readLengthPrefixedBytes();
+      expect(encodedBytes).toEqual(new Uint8Array([0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]));
+    });
+  
+    it("re-encodes non-minimal big mantissas to canonical bytes", () => {
+      const writer = new Writer();
+      encodeValuePayload(writer, {
+        type: "decimal",
+        exponent: 0,
+        mantissa: {
+          type: "big",
+          bytes: new Uint8Array([0x00, 0x01, 0x23, 0x45, 0x67, 0x89, 0xAB, 0xCD, 0xEF, 0x01]),
+        },
+      });
+  
+      const reader = new Reader(writer.finish());
+      expect(reader.readSignedVarint()).toBe(0n);
+      expect(reader.readByte()).toBe(0x01);
+      expect(reader.readLengthPrefixedBytes()).toEqual(
+        new Uint8Array([0x01, 0x23, 0x45, 0x67, 0x89, 0xAB, 0xCD, 0xEF, 0x01])
       );
-    }
-    const edit = builder.build();
-
-    // Should be compressed (above default threshold)
-    const encoded = await encodeEditAuto(edit);
-    expect(isCompressed(encoded)).toBe(true);
-
-    // Should decode correctly
-    const decoded = await decodeEditAuto(encoded);
-    expect(idsEqual(decoded.id, edit.id)).toBe(true);
-    expect(decoded.ops.length).toBe(edit.ops.length);
+    });
+  
+    it("rejects non-minimal decimal mantissa bytes on decode", () => {
+      const writer = new Writer();
+      writer.writeSignedVarint(0n);
+      writer.writeByte(0x01);
+      writer.writeLengthPrefixedBytes(new Uint8Array([0x00, 0x7F]));
+  
+      expect(() => decodeValuePayload(new Reader(writer.finish()), DataType.Decimal))
+        .toThrow("decimal mantissa bytes are not minimal");
+    });
+  
+    it("rejects empty big mantissa bytes on decode", () => {
+      const writer = new Writer();
+      writer.writeSignedVarint(0n);
+      writer.writeByte(0x01);
+      writer.writeLengthPrefixedBytes(new Uint8Array([]));
+  
+      expect(() => decodeValuePayload(new Reader(writer.finish()), DataType.Decimal))
+        .toThrow("decimal mantissa bytes are not minimal");
+    });
+  
+    it("rejects exponents outside int32 range on decode", () => {
+      const writer = new Writer();
+      writer.writeSignedVarint(2147483648n);
+      writer.writeByte(0x00);
+      writer.writeSignedVarint(1n);
+  
+      expect(() => decodeValuePayload(new Reader(writer.finish()), DataType.Decimal))
+        .toThrow("DECIMAL exponent outside int32 range");
+    });
+  
+    it("rejects exponent overflow during decode-time normalization", () => {
+      const writer = new Writer();
+      writer.writeSignedVarint(2147483647n);
+      writer.writeByte(0x00);
+      writer.writeSignedVarint(10n);
+  
+      expect(() => decodeValuePayload(new Reader(writer.finish()), DataType.Decimal))
+        .toThrow("DECIMAL exponent outside int32 range");
+    });
+  
+    it("rejects exponent overflow during encode-time normalization", () => {
+      const writer = new Writer();
+  
+      expect(() => encodeValuePayload(writer, {
+        type: "decimal",
+        exponent: 2147483647,
+        mantissa: { type: "i64", value: 10n },
+      })).toThrow("DECIMAL exponent outside int32 range");
+    });
+  
+    it("rejects decimal big mantissa lengths over the maximum", () => {
+      const writer = new Writer();
+      writer.writeSignedVarint(0n);
+      writer.writeByte(0x01);
+      writer.writeVarintNumber(64 * 1024 * 1024 + 1);
+  
+      expect(() => decodeValuePayload(new Reader(writer.finish()), DataType.Decimal))
+        .toThrow("decimal mantissa length 67108865 exceeds maximum 67108864");
+    });
   });
 
-  it("encodeEditAuto respects threshold option", async () => {
-    const editId = randomId();
-    const entityId = randomId();
-
-    const edit = new EditBuilder(editId)
-      .setName("Threshold Test")
-      .createEntity(entityId, (e) =>
-        e.text(properties.name(), "Test", undefined)
-      )
-      .build();
-
-    // With threshold: 0, should always compress
-    const alwaysCompressed = await encodeEditAuto(edit, { threshold: 0 });
-    expect(isCompressed(alwaysCompressed)).toBe(true);
-
-    // With threshold: Infinity, should never compress
-    const neverCompressed = await encodeEditAuto(edit, { threshold: Infinity });
-    expect(isCompressed(neverCompressed)).toBe(false);
-
-    // Both should decode correctly
-    const decoded1 = await decodeEditAuto(alwaysCompressed);
-    const decoded2 = await decodeEditAuto(neverCompressed);
-    expect(idsEqual(decoded1.id, edit.id)).toBe(true);
-    expect(idsEqual(decoded2.id, edit.id)).toBe(true);
+  describe("Compression", () => {
+    it("isCompressed detects GRC2Z magic", () => {
+      const compressed = new Uint8Array([0x47, 0x52, 0x43, 0x32, 0x5a, 0x00]); // "GRC2Z" + data
+      const uncompressed = new Uint8Array([0x47, 0x52, 0x43, 0x32, 0x00]); // "GRC2" + data
+  
+      expect(isCompressed(compressed)).toBe(true);
+      expect(isCompressed(uncompressed)).toBe(false);
+    });
+  
+    it("isCompressed returns false for short data", () => {
+      expect(isCompressed(new Uint8Array([0x47, 0x52, 0x43, 0x32]))).toBe(false);
+      expect(isCompressed(new Uint8Array([]))).toBe(false);
+    });
+  
+    it("encodes and decodes compressed edit", async () => {
+      const editId = randomId();
+      const entityId = randomId();
+  
+      const edit = new EditBuilder(editId)
+        .setName("Compressed Test")
+        .setCreatedAt(1234567890000000n)
+        .createEntity(entityId, (e) =>
+          e.text(properties.name(), "Alice", undefined)
+           .text(properties.description(), "A person named Alice with a long description to make compression worthwhile", undefined)
+        )
+        .build();
+  
+      const compressed = await encodeEditCompressed(edit);
+  
+      // Check magic bytes
+      expect(String.fromCharCode(...compressed.slice(0, 5))).toBe("GRC2Z");
+  
+      // Verify it's detected as compressed
+      expect(isCompressed(compressed)).toBe(true);
+  
+      // Decode and verify
+      const decoded = await decodeEditCompressed(compressed);
+  
+      expect(idsEqual(decoded.id, edit.id)).toBe(true);
+      expect(decoded.name).toBe(edit.name);
+      expect(decoded.createdAt).toBe(edit.createdAt);
+      expect(decoded.ops.length).toBe(edit.ops.length);
+    });
+  
+    it("compressed data is smaller than uncompressed for larger edits", async () => {
+      const editId = randomId();
+  
+      // Create an edit with repetitive data (good for compression)
+      const builder = new EditBuilder(editId).setName("Large Test");
+  
+      for (let i = 0; i < 50; i++) {
+        const entityId = randomId();
+        builder.createEntity(entityId, (e) =>
+          e.text(properties.name(), `Entity number ${i} with some padding text`, undefined)
+           .text(properties.description(), "This is a repeated description that should compress well", undefined)
+        );
+      }
+  
+      const edit = builder.build();
+  
+      const uncompressed = encodeEdit(edit);
+      const compressed = await encodeEditCompressed(edit);
+  
+      // Compressed should be smaller
+      expect(compressed.length).toBeLessThan(uncompressed.length);
+    });
+  
+    it("decodeEditAuto handles both formats", async () => {
+      const editId = randomId();
+      const entityId = randomId();
+  
+      const edit = new EditBuilder(editId)
+        .setName("Auto Test")
+        .createEntity(entityId, (e) =>
+          e.text(properties.name(), "Test", undefined)
+        )
+        .build();
+  
+      const uncompressed = encodeEdit(edit);
+      const compressed = await encodeEditCompressed(edit);
+  
+      // Should decode both formats
+      const decoded1 = await decodeEditAuto(uncompressed);
+      const decoded2 = await decodeEditAuto(compressed);
+  
+      expect(idsEqual(decoded1.id, edit.id)).toBe(true);
+      expect(idsEqual(decoded2.id, edit.id)).toBe(true);
+      expect(decoded1.name).toBe(edit.name);
+      expect(decoded2.name).toBe(edit.name);
+    });
+  
+    it("compressed canonical encoding roundtrips", async () => {
+      const editId = parseId("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")!;
+      const entityId = parseId("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")!;
+  
+      const edit = new EditBuilder(editId)
+        .setName("Canonical Compressed Test")
+        .setCreatedAt(1000000n)
+        .createEntity(entityId, (e) =>
+          e.text(properties.name(), "Test", undefined)
+        )
+        .build();
+  
+      const compressed = await encodeEditCompressed(edit, { canonical: true });
+      const decoded = await decodeEditCompressed(compressed);
+  
+      expect(idsEqual(decoded.id, edit.id)).toBe(true);
+      expect(decoded.name).toBe(edit.name);
+    });
+  
+    it("preloadCompression loads WASM", async () => {
+      // After preloading, compression should be ready
+      await preloadCompression();
+      expect(isCompressionReady()).toBe(true);
+    });
+  
+    it("encodeEditAuto returns uncompressed for small edits", async () => {
+      const editId = randomId();
+      const entityId = randomId();
+  
+      // Create a small edit
+      const edit = new EditBuilder(editId)
+        .setName("Small")
+        .createEmptyEntity(entityId)
+        .build();
+  
+      // With default threshold, small edits should not be compressed
+      const encoded = await encodeEditAuto(edit);
+  
+      // Should have GRC2 magic (uncompressed)
+      expect(String.fromCharCode(...encoded.slice(0, 4))).toBe("GRC2");
+      expect(isCompressed(encoded)).toBe(false);
+  
+      // Should decode correctly
+      const decoded = await decodeEditAuto(encoded);
+      expect(idsEqual(decoded.id, edit.id)).toBe(true);
+    });
+  
+    it("encodeEditAuto compresses large edits", async () => {
+      const editId = randomId();
+  
+      // Create a large edit
+      const builder = new EditBuilder(editId).setName("Large Auto Test");
+      for (let i = 0; i < 20; i++) {
+        const entityId = randomId();
+        builder.createEntity(entityId, (e) =>
+          e.text(properties.name(), `Entity ${i} with padding`, undefined)
+           .text(properties.description(), "Repeated description for compression", undefined)
+        );
+      }
+      const edit = builder.build();
+  
+      // Should be compressed (above default threshold)
+      const encoded = await encodeEditAuto(edit);
+      expect(isCompressed(encoded)).toBe(true);
+  
+      // Should decode correctly
+      const decoded = await decodeEditAuto(encoded);
+      expect(idsEqual(decoded.id, edit.id)).toBe(true);
+      expect(decoded.ops.length).toBe(edit.ops.length);
+    });
+  
+    it("encodeEditAuto respects threshold option", async () => {
+      const editId = randomId();
+      const entityId = randomId();
+  
+      const edit = new EditBuilder(editId)
+        .setName("Threshold Test")
+        .createEntity(entityId, (e) =>
+          e.text(properties.name(), "Test", undefined)
+        )
+        .build();
+  
+      // With threshold: 0, should always compress
+      const alwaysCompressed = await encodeEditAuto(edit, { threshold: 0 });
+      expect(isCompressed(alwaysCompressed)).toBe(true);
+  
+      // With threshold: Infinity, should never compress
+      const neverCompressed = await encodeEditAuto(edit, { threshold: Infinity });
+      expect(isCompressed(neverCompressed)).toBe(false);
+  
+      // Both should decode correctly
+      const decoded1 = await decodeEditAuto(alwaysCompressed);
+      const decoded2 = await decodeEditAuto(neverCompressed);
+      expect(idsEqual(decoded1.id, edit.id)).toBe(true);
+      expect(idsEqual(decoded2.id, edit.id)).toBe(true);
+    });
   });
-});
