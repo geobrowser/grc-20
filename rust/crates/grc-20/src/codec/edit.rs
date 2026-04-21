@@ -14,6 +14,7 @@ use crate::limits::{
     FORMAT_VERSION, MAGIC_COMPRESSED, MAGIC_UNCOMPRESSED, MAX_AUTHORS, MAX_DICT_SIZE,
     MAX_EDIT_SIZE, MAX_OPS_PER_EDIT, MAX_STRING_LEN, MIN_FORMAT_VERSION,
 };
+use crate::model::id::is_valid_uuid;
 use crate::model::{
     Context, ContextEdge, DataType, DictionaryBuilder, Edit, Id, Op, UnsetLanguage,
     UnsetRelationField, WireDictionaries,
@@ -526,12 +527,45 @@ impl EncodeOptions {
 }
 
 fn validate_context_limits(context: &Context) -> Result<(), EncodeError> {
+    validate_uuid(&context.root_id, "context root_id")?;
     if context.edges.len() > MAX_DICT_SIZE {
         return Err(EncodeError::LengthExceedsLimit {
             field: "context_edges",
             len: context.edges.len(),
             max: MAX_DICT_SIZE,
         });
+    }
+    for edge in &context.edges {
+        validate_uuid(&edge.type_id, "context edge type_id")?;
+        validate_uuid(&edge.to_entity_id, "context edge to_entity_id")?;
+    }
+    Ok(())
+}
+
+fn validate_uuid(id: &Id, context: &'static str) -> Result<(), EncodeError> {
+    if is_valid_uuid(id) {
+        Ok(())
+    } else {
+        Err(EncodeError::InvalidInput { context })
+    }
+}
+
+fn validate_property_value_ids(value: &crate::model::PropertyValue<'_>) -> Result<(), EncodeError> {
+    validate_uuid(&value.property, "property value property")?;
+    match &value.value {
+        crate::model::Value::Integer { unit, .. }
+        | crate::model::Value::Float { unit, .. }
+        | crate::model::Value::Decimal { unit, .. } => {
+            if let Some(unit) = unit {
+                validate_uuid(unit, "property value unit")?;
+            }
+        }
+        crate::model::Value::Text { language, .. } => {
+            if let Some(language) = language {
+                validate_uuid(language, "property value language")?;
+            }
+        }
+        _ => {}
     }
     Ok(())
 }
@@ -543,6 +577,7 @@ fn validate_context_limits(context: &Context) -> Result<(), EncodeError> {
 /// - Section 6.4: op type constraints
 /// - Section 3.2 / 3.6: update set/unset overlap and TEXT-only language slots
 fn validate_edit_inputs(edit: &Edit) -> Result<(), EncodeError> {
+    validate_uuid(&edit.id, "edit id")?;
     let name_len = edit.name.as_bytes().len();
     if name_len > MAX_STRING_LEN {
         return Err(EncodeError::LengthExceedsLimit {
@@ -557,6 +592,9 @@ fn validate_edit_inputs(edit: &Edit) -> Result<(), EncodeError> {
             len: edit.authors.len(),
             max: MAX_AUTHORS,
         });
+    }
+    for author in &edit.authors {
+        validate_uuid(author, "edit author")?;
     }
     if edit.ops.len() > MAX_OPS_PER_EDIT {
         return Err(EncodeError::LengthExceedsLimit {
@@ -573,6 +611,7 @@ fn validate_edit_inputs(edit: &Edit) -> Result<(), EncodeError> {
     for op in &edit.ops {
         match op {
             Op::CreateEntity(ce) => {
+                validate_uuid(&ce.id, "create_entity id")?;
                 if deleted_entities.contains(&ce.id) {
                     return Err(EncodeError::InvalidInput { context: "delete-then-create entity in same edit" });
                 }
@@ -584,6 +623,7 @@ fn validate_edit_inputs(edit: &Edit) -> Result<(), EncodeError> {
                     });
                 }
                 for pv in &ce.values {
+                    validate_property_value_ids(pv)?;
                     let dt = pv.value.data_type();
                     if let Some(existing) = property_types.get(&pv.property) {
                         if *existing != dt {
@@ -598,6 +638,7 @@ fn validate_edit_inputs(edit: &Edit) -> Result<(), EncodeError> {
                 }
             }
             Op::UpdateEntity(ue) => {
+                validate_uuid(&ue.id, "update_entity id")?;
                 if ue.set_properties.len() > crate::limits::MAX_VALUES_PER_ENTITY {
                     return Err(EncodeError::LengthExceedsLimit {
                         field: "set_properties",
@@ -614,6 +655,7 @@ fn validate_edit_inputs(edit: &Edit) -> Result<(), EncodeError> {
                 }
                 let mut set_langs: FxHashMap<Id, FxHashSet<Option<Id>>> = FxHashMap::default();
                 for pv in &ue.set_properties {
+                    validate_property_value_ids(pv)?;
                     let dt = pv.value.data_type();
                     if let Some(existing) = property_types.get(&pv.property) {
                         if *existing != dt {
@@ -630,6 +672,7 @@ fn validate_edit_inputs(edit: &Edit) -> Result<(), EncodeError> {
                 }
 
                 for unset in &ue.unset_values {
+                    validate_uuid(&unset.property, "update_entity unset property")?;
                     match &unset.language {
                         UnsetLanguage::All => {
                             if let Some(existing) = set_langs.get(&unset.property) {
@@ -653,6 +696,7 @@ fn validate_edit_inputs(edit: &Edit) -> Result<(), EncodeError> {
                             }
                         }
                         UnsetLanguage::Specific(lang_id) => {
+                            validate_uuid(lang_id, "update_entity unset language")?;
                             if let Some(existing) = set_langs.get(&unset.property) {
                                 if existing.contains(&Some(*lang_id)) {
                                     return Err(EncodeError::InvalidInput { context: "update_entity set/unset overlap" });
@@ -673,17 +717,38 @@ fn validate_edit_inputs(edit: &Edit) -> Result<(), EncodeError> {
                 }
             }
             Op::DeleteEntity(de) => {
+                validate_uuid(&de.id, "delete_entity id")?;
                 deleted_entities.insert(de.id);
                 if let Some(ctx) = &de.context {
                     validate_context_limits(ctx)?;
                 }
             }
             Op::RestoreEntity(re) => {
+                validate_uuid(&re.id, "restore_entity id")?;
                 if let Some(ctx) = &re.context {
                     validate_context_limits(ctx)?;
                 }
             }
             Op::CreateRelation(cr) => {
+                validate_uuid(&cr.id, "create_relation id")?;
+                validate_uuid(&cr.relation_type, "create_relation relation_type")?;
+                validate_uuid(&cr.from, "create_relation from")?;
+                validate_uuid(&cr.to, "create_relation to")?;
+                if let Some(from_space) = &cr.from_space {
+                    validate_uuid(from_space, "create_relation from_space")?;
+                }
+                if let Some(from_version) = &cr.from_version {
+                    validate_uuid(from_version, "create_relation from_version")?;
+                }
+                if let Some(to_space) = &cr.to_space {
+                    validate_uuid(to_space, "create_relation to_space")?;
+                }
+                if let Some(to_version) = &cr.to_version {
+                    validate_uuid(to_version, "create_relation to_version")?;
+                }
+                if let Some(entity) = &cr.entity {
+                    validate_uuid(entity, "create_relation entity")?;
+                }
                 if deleted_relations.contains(&cr.id) {
                     return Err(EncodeError::InvalidInput { context: "delete-then-create relation in same edit" });
                 }
@@ -697,6 +762,19 @@ fn validate_edit_inputs(edit: &Edit) -> Result<(), EncodeError> {
                 }
             }
             Op::UpdateRelation(ur) => {
+                validate_uuid(&ur.id, "update_relation id")?;
+                if let Some(from_space) = &ur.from_space {
+                    validate_uuid(from_space, "update_relation from_space")?;
+                }
+                if let Some(from_version) = &ur.from_version {
+                    validate_uuid(from_version, "update_relation from_version")?;
+                }
+                if let Some(to_space) = &ur.to_space {
+                    validate_uuid(to_space, "update_relation to_space")?;
+                }
+                if let Some(to_version) = &ur.to_version {
+                    validate_uuid(to_version, "update_relation to_version")?;
+                }
                 let mut seen_unset: FxHashSet<UnsetRelationField> = FxHashSet::default();
                 for field in &ur.unset {
                     if !seen_unset.insert(*field) {
@@ -723,17 +801,28 @@ fn validate_edit_inputs(edit: &Edit) -> Result<(), EncodeError> {
                 }
             }
             Op::DeleteRelation(dr) => {
+                validate_uuid(&dr.id, "delete_relation id")?;
                 deleted_relations.insert(dr.id);
                 if let Some(ctx) = &dr.context {
                     validate_context_limits(ctx)?;
                 }
             }
             Op::RestoreRelation(rr) => {
+                validate_uuid(&rr.id, "restore_relation id")?;
                 if let Some(ctx) = &rr.context {
                     validate_context_limits(ctx)?;
                 }
             }
             Op::CreateValueRef(cvr) => {
+                validate_uuid(&cvr.id, "create_value_ref id")?;
+                validate_uuid(&cvr.entity, "create_value_ref entity")?;
+                validate_uuid(&cvr.property, "create_value_ref property")?;
+                if let Some(language) = &cvr.language {
+                    validate_uuid(language, "create_value_ref language")?;
+                }
+                if let Some(space) = &cvr.space {
+                    validate_uuid(space, "create_value_ref space")?;
+                }
                 if cvr.language.is_some() {
                     if let Some(existing) = property_types.get(&cvr.property) {
                         if *existing != DataType::Text {
@@ -1164,17 +1253,28 @@ mod tests {
         UpdateEntity, UpdateRelation, UnsetLanguage, UnsetRelationField, UnsetValue, Value,
     };
 
+    fn valid_id(byte: u8) -> Id {
+        if byte == 0 {
+            return [0u8; 16];
+        }
+
+        let mut id = [byte; 16];
+        id[6] = (id[6] & 0x0F) | 0x40;
+        id[8] = (id[8] & 0x3F) | 0x80;
+        id
+    }
+
     fn make_test_edit() -> Edit<'static> {
         Edit {
-            id: [1u8; 16],
+            id: valid_id(1),
             name: Cow::Owned("Test Edit".to_string()),
-            authors: vec![[2u8; 16]],
+            authors: vec![valid_id(2)],
             created_at: 1234567890,
                         ops: vec![
                 Op::CreateEntity(CreateEntity {
-                    id: [3u8; 16],
+                    id: valid_id(3),
                     values: vec![PropertyValue {
-                        property: [10u8; 16],
+                        property: valid_id(10),
                         value: Value::Text {
                             value: Cow::Owned("Hello".to_string()),
                             language: None,
@@ -1217,21 +1317,21 @@ mod tests {
     #[test]
     fn test_update_entity_set_unset_overlap_rejected() {
         let edit = Edit {
-            id: [1u8; 16],
+            id: valid_id(1),
             name: Cow::Borrowed(""),
             authors: vec![],
             created_at: 0,
             ops: vec![Op::UpdateEntity(UpdateEntity {
-                id: [2u8; 16],
+                id: valid_id(2),
                 set_properties: vec![PropertyValue {
-                    property: [3u8; 16],
+                    property: valid_id(3),
                     value: Value::Text {
                         value: Cow::Owned("x".to_string()),
                         language: None,
                     },
                 }],
                 unset_values: vec![UnsetValue {
-                    property: [3u8; 16],
+                    property: valid_id(3),
                     language: UnsetLanguage::English,
                 }],
                 context: None,
@@ -1245,18 +1345,18 @@ mod tests {
     #[test]
     fn test_unset_language_requires_text() {
         let edit = Edit {
-            id: [1u8; 16],
+            id: valid_id(1),
             name: Cow::Borrowed(""),
             authors: vec![],
             created_at: 0,
             ops: vec![Op::UpdateEntity(UpdateEntity {
-                id: [2u8; 16],
+                id: valid_id(2),
                 set_properties: vec![PropertyValue {
-                    property: [3u8; 16],
+                    property: valid_id(3),
                     value: Value::Integer { value: 1, unit: None },
                 }],
                 unset_values: vec![UnsetValue {
-                    property: [3u8; 16],
+                    property: valid_id(3),
                     language: UnsetLanguage::English,
                 }],
                 context: None,
@@ -1270,13 +1370,13 @@ mod tests {
     #[test]
     fn test_update_relation_set_unset_overlap_rejected() {
         let edit = Edit {
-            id: [1u8; 16],
+            id: valid_id(1),
             name: Cow::Borrowed(""),
             authors: vec![],
             created_at: 0,
             ops: vec![Op::UpdateRelation(UpdateRelation {
-                id: [4u8; 16],
-                from_space: Some([5u8; 16]),
+                id: valid_id(4),
+                from_space: Some(valid_id(5)),
                 from_version: None,
                 to_space: None,
                 to_version: None,
@@ -1293,15 +1393,15 @@ mod tests {
     #[test]
     fn test_property_type_mismatch_rejected() {
         let edit = Edit {
-            id: [1u8; 16],
+            id: valid_id(1),
             name: Cow::Borrowed(""),
             authors: vec![],
             created_at: 0,
             ops: vec![
                 Op::CreateEntity(CreateEntity {
-                    id: [2u8; 16],
+                    id: valid_id(2),
                     values: vec![PropertyValue {
-                        property: [3u8; 16],
+                        property: valid_id(3),
                         value: Value::Text {
                             value: Cow::Owned("x".to_string()),
                             language: None,
@@ -1310,9 +1410,9 @@ mod tests {
                     context: None,
                 }),
                 Op::UpdateEntity(UpdateEntity {
-                    id: [2u8; 16],
+                    id: valid_id(2),
                     set_properties: vec![PropertyValue {
-                        property: [3u8; 16],
+                        property: valid_id(3),
                         value: Value::Integer { value: 1, unit: None },
                     }],
                     unset_values: vec![],
@@ -1328,17 +1428,17 @@ mod tests {
     #[test]
     fn test_delete_then_create_entity_rejected() {
         let edit = Edit {
-            id: [1u8; 16],
+            id: valid_id(1),
             name: Cow::Borrowed(""),
             authors: vec![],
             created_at: 0,
             ops: vec![
                 Op::DeleteEntity(DeleteEntity {
-                    id: [2u8; 16],
+                    id: valid_id(2),
                     context: None,
                 }),
                 Op::CreateEntity(CreateEntity {
-                    id: [2u8; 16],
+                    id: valid_id(2),
                     values: vec![],
                     context: None,
                 }),
@@ -1352,23 +1452,23 @@ mod tests {
     #[test]
     fn test_delete_then_create_relation_rejected() {
         let edit = Edit {
-            id: [1u8; 16],
+            id: valid_id(1),
             name: Cow::Borrowed(""),
             authors: vec![],
             created_at: 0,
             ops: vec![
                 Op::DeleteRelation(DeleteRelation {
-                    id: [4u8; 16],
+                    id: valid_id(4),
                     context: None,
                 }),
                 Op::CreateRelation(CreateRelation {
-                    id: [4u8; 16],
-                    relation_type: [5u8; 16],
-                    from: [6u8; 16],
+                    id: valid_id(4),
+                    relation_type: valid_id(5),
+                    from: valid_id(6),
                     from_is_value_ref: false,
                     from_space: None,
                     from_version: None,
-                    to: [7u8; 16],
+                    to: valid_id(7),
                     to_is_value_ref: false,
                     to_space: None,
                     to_version: None,
@@ -1386,22 +1486,22 @@ mod tests {
     #[test]
     fn test_create_relation_entity_equals_id_rejected() {
         let edit = Edit {
-            id: [1u8; 16],
+            id: valid_id(1),
             name: Cow::Borrowed(""),
             authors: vec![],
             created_at: 0,
             ops: vec![Op::CreateRelation(CreateRelation {
-                id: [4u8; 16],
-                relation_type: [5u8; 16],
-                from: [6u8; 16],
+                id: valid_id(4),
+                relation_type: valid_id(5),
+                from: valid_id(6),
                 from_is_value_ref: false,
                 from_space: None,
                 from_version: None,
-                to: [7u8; 16],
+                to: valid_id(7),
                 to_is_value_ref: false,
                 to_space: None,
                 to_version: None,
-                entity: Some([4u8; 16]),
+                entity: Some(valid_id(4)),
                 position: None,
                 context: None,
             })],
@@ -1414,24 +1514,24 @@ mod tests {
     #[test]
     fn test_create_value_ref_language_requires_text() {
         let edit = Edit {
-            id: [1u8; 16],
+            id: valid_id(1),
             name: Cow::Borrowed(""),
             authors: vec![],
             created_at: 0,
             ops: vec![
                 Op::CreateEntity(CreateEntity {
-                    id: [2u8; 16],
+                    id: valid_id(2),
                     values: vec![PropertyValue {
-                        property: [3u8; 16],
+                        property: valid_id(3),
                         value: Value::Integer { value: 1, unit: None },
                     }],
                     context: None,
                 }),
                 Op::CreateValueRef(CreateValueRef {
-                    id: [8u8; 16],
-                    entity: [2u8; 16],
-                    property: [3u8; 16],
-                    language: Some([9u8; 16]),
+                    id: valid_id(8),
+                    entity: valid_id(2),
+                    property: valid_id(3),
+                    language: Some(valid_id(9)),
                     space: None,
                 }),
             ],
@@ -1443,27 +1543,30 @@ mod tests {
 
     #[test]
     fn test_value_ref_endpoints_not_in_object_ids() {
+        let value_ref_id = valid_id(10);
+        let entity_id = valid_id(2);
+
         let edit = Edit {
-            id: [1u8; 16],
+            id: valid_id(1),
             name: Cow::Borrowed(""),
             authors: vec![],
             created_at: 0,
             ops: vec![
                 Op::CreateValueRef(CreateValueRef {
-                    id: [10u8; 16],
-                    entity: [2u8; 16],
-                    property: [3u8; 16],
+                    id: value_ref_id,
+                    entity: entity_id,
+                    property: valid_id(3),
                     language: None,
                     space: None,
                 }),
                 Op::CreateRelation(CreateRelation {
-                    id: [4u8; 16],
-                    relation_type: [5u8; 16],
-                    from: [10u8; 16],
+                    id: valid_id(4),
+                    relation_type: valid_id(5),
+                    from: value_ref_id,
                     from_is_value_ref: true,
                     from_space: None,
                     from_version: None,
-                    to: [2u8; 16],
+                    to: entity_id,
                     to_is_value_ref: false,
                     to_space: None,
                     to_version: None,
@@ -1493,27 +1596,27 @@ mod tests {
         let objects = read_id_vec_no_duplicates(&mut reader, MAX_DICT_SIZE, "objects").unwrap();
         let _context_ids = read_id_vec_no_duplicates(&mut reader, MAX_DICT_SIZE, "context_ids").unwrap();
 
-        assert!(!objects.contains(&[10u8; 16]));
-        assert!(objects.contains(&[2u8; 16]));
+        assert!(!objects.contains(&value_ref_id));
+        assert!(objects.contains(&entity_id));
     }
 
     #[test]
     fn test_canonical_rejects_duplicate_unset() {
         let edit = Edit {
-            id: [1u8; 16],
+            id: valid_id(1),
             name: Cow::Borrowed(""),
             authors: vec![],
             created_at: 0,
             ops: vec![Op::UpdateEntity(UpdateEntity {
-                id: [2u8; 16],
+                id: valid_id(2),
                 set_properties: vec![],
                 unset_values: vec![
                     UnsetValue {
-                        property: [3u8; 16],
+                        property: valid_id(3),
                         language: UnsetLanguage::English,
                     },
                     UnsetValue {
-                        property: [3u8; 16],
+                        property: valid_id(3),
                         language: UnsetLanguage::English,
                     },
                 ],
@@ -1528,12 +1631,12 @@ mod tests {
     #[test]
     fn test_canonical_rejects_duplicate_update_relation_unset_fields() {
         let edit = Edit {
-            id: [1u8; 16],
+            id: valid_id(1),
             name: Cow::Borrowed(""),
             authors: vec![],
             created_at: 0,
             ops: vec![Op::UpdateRelation(UpdateRelation {
-                id: [4u8; 16],
+                id: valid_id(4),
                 from_space: None,
                 from_version: None,
                 to_space: None,
@@ -1602,18 +1705,18 @@ mod tests {
         // Two edits with values in different order should produce
         // identical bytes when using canonical encoding
 
-        let prop_a = [0x0A; 16]; // Comes first lexicographically
-        let prop_b = [0x0B; 16]; // Comes second
+        let prop_a = valid_id(0x0A); // Comes first lexicographically
+        let prop_b = valid_id(0x0B); // Comes second
 
         // Edit 1: values in order A, B
         let edit1: Edit<'static> = Edit {
-            id: [1u8; 16],
+            id: valid_id(1),
             name: Cow::Owned("Test".to_string()),
             authors: vec![],
             created_at: 0,
                         ops: vec![
                 Op::CreateEntity(CreateEntity {
-                    id: [3u8; 16],
+                    id: valid_id(3),
                     values: vec![
                         PropertyValue {
                             property: prop_a,
@@ -1634,13 +1737,13 @@ mod tests {
 
         // Edit 2: Same content but values in different order
         let edit2: Edit<'static> = Edit {
-            id: [1u8; 16],
+            id: valid_id(1),
             name: Cow::Owned("Test".to_string()),
             authors: vec![],
             created_at: 0,
                         ops: vec![
                 Op::CreateEntity(CreateEntity {
-                    id: [3u8; 16],
+                    id: valid_id(3),
                     values: vec![
                         // Note: prop_b first this time (different insertion order)
                         PropertyValue {
@@ -1717,7 +1820,7 @@ mod tests {
 
     #[test]
     fn test_canonical_rejects_duplicate_authors() {
-        let author1 = [1u8; 16];
+        let author1 = valid_id(1);
 
         let edit: Edit<'static> = Edit {
             id: [0u8; 16],
@@ -1738,7 +1841,7 @@ mod tests {
 
     #[test]
     fn test_canonical_rejects_duplicate_values() {
-        let prop = [10u8; 16];
+        let prop = valid_id(10);
 
         let edit: Edit<'static> = Edit {
             id: [0u8; 16],
@@ -1747,7 +1850,7 @@ mod tests {
             created_at: 0,
                         ops: vec![
                 Op::CreateEntity(CreateEntity {
-                    id: [1u8; 16],
+                    id: valid_id(1),
                     values: vec![
                         PropertyValue {
                             property: prop,
@@ -1776,9 +1879,9 @@ mod tests {
 
     #[test]
     fn test_canonical_allows_different_languages() {
-        let prop = [10u8; 16];
-        let lang_en = [20u8; 16];
-        let lang_es = [21u8; 16];
+        let prop = valid_id(10);
+        let lang_en = valid_id(20);
+        let lang_es = valid_id(21);
 
         let edit: Edit<'static> = Edit {
             id: [0u8; 16],
@@ -1787,7 +1890,7 @@ mod tests {
             created_at: 0,
                         ops: vec![
                 Op::CreateEntity(CreateEntity {
-                    id: [1u8; 16],
+                    id: valid_id(1),
                     values: vec![
                         PropertyValue {
                             property: prop,
@@ -1816,18 +1919,18 @@ mod tests {
 
     #[test]
     fn test_canonical_sorts_values_deterministically() {
-        let prop_a = [0x0A; 16];
-        let prop_b = [0x0B; 16];
+        let prop_a = valid_id(0x0A);
+        let prop_b = valid_id(0x0B);
 
         // Values in reverse order (B before A)
         let edit: Edit<'static> = Edit {
-            id: [1u8; 16],
+            id: valid_id(1),
             name: Cow::Owned("Test".to_string()),
             authors: vec![],
             created_at: 0,
                         ops: vec![
                 Op::CreateEntity(CreateEntity {
-                    id: [3u8; 16],
+                    id: valid_id(3),
                     values: vec![
                         PropertyValue {
                             property: prop_b, // B first

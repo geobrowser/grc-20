@@ -4,6 +4,30 @@ import { createId, type Id } from "../types/id.js";
 export type { Id } from "../types/id.js";
 
 /**
+ * Returns true if the bytes are the nil UUID or an RFC 4122/9562 UUID
+ * with the standard variant and a known version nibble.
+ */
+export function isValidUuidBytes(bytes: Uint8Array): boolean {
+  if (bytes.length !== 16) {
+    return false;
+  }
+
+  let isNil = true;
+  for (let i = 0; i < 16; i++) {
+    if (bytes[i] !== 0) {
+      isNil = false;
+      break;
+    }
+  }
+  if (isNil) {
+    return true;
+  }
+
+  const version = (bytes[6] & 0xf0) >> 4;
+  return (bytes[8] & 0xc0) === 0x80 && version >= 1 && version <= 8;
+}
+
+/**
  * Formats a UUID as non-hyphenated lowercase hex (recommended display format).
  */
 export function formatId(id: Id): string {

@@ -14,19 +14,19 @@
 //!
 //! ```rust
 //! use std::borrow::Cow;
-//! use grc_20::{Edit, Op, CreateEntity, PropertyValue, Value, DataType};
+//! use grc_20::{Edit, Op, CreateEntity, PropertyValue, Value, parse_id};
 //! use grc_20::codec::{encode_edit, decode_edit};
 //! use grc_20::genesis::properties;
 //!
 //! // Create an edit with an entity
 //! let edit = Edit {
-//!     id: [1u8; 16],
+//!     id: parse_id("11111111-1111-4111-8111-111111111111").unwrap(),
 //!     name: Cow::Owned("My Edit".to_string()),
-//!     authors: vec![[2u8; 16]],
+//!     authors: vec![parse_id("22222222-2222-4222-8222-222222222222").unwrap()],
 //!     created_at: 1234567890,
 //!     ops: vec![
 //!         Op::CreateEntity(CreateEntity {
-//!             id: [3u8; 16],
+//!             id: parse_id("33333333-3333-4333-8333-333333333333").unwrap(),
 //!             values: vec![PropertyValue {
 //!                 property: properties::name(),
 //!                 value: Value::Text {

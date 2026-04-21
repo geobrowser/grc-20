@@ -13,6 +13,17 @@ pub type Id = [u8; 16];
 /// The zero/nil UUID.
 pub const NIL_ID: Id = [0u8; 16];
 
+/// Returns true if an ID is the nil UUID or a standard-variant UUID
+/// with a recognized version nibble.
+pub fn is_valid_uuid(id: &Id) -> bool {
+    if *id == NIL_ID {
+        return true;
+    }
+
+    let version = id[6] >> 4;
+    (id[8] & 0xC0) == 0x80 && (1..=8).contains(&version)
+}
+
 /// Derives a UUIDv8 from input bytes using SHA-256.
 ///
 /// This implements the `derived_uuid` function from spec Section 2.1:
@@ -201,5 +212,25 @@ mod tests {
         // Verify it's a valid UUIDv8
         assert_eq!(entity1[6] & 0xF0, 0x80);
         assert_eq!(entity1[8] & 0xC0, 0x80);
+    }
+
+    #[test]
+    fn test_is_valid_uuid_accepts_nil_and_standard_variant_versions() {
+        assert!(is_valid_uuid(&NIL_ID));
+
+        let v4 = parse_id("550e8400-e29b-41d4-a716-446655440000").unwrap();
+        assert!(is_valid_uuid(&v4));
+
+        let v8 = derived_uuid(b"test");
+        assert!(is_valid_uuid(&v8));
+    }
+
+    #[test]
+    fn test_is_valid_uuid_rejects_invalid_version_or_variant() {
+        let invalid_version = parse_id("550e8400-e29b-f1d4-a716-446655440000").unwrap();
+        assert!(!is_valid_uuid(&invalid_version));
+
+        let invalid_variant = parse_id("550e8400-e29b-41d4-e716-446655440000").unwrap();
+        assert!(!is_valid_uuid(&invalid_variant));
     }
 }

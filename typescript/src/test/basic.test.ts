@@ -32,6 +32,7 @@ import {
   types,
   relationTypes,
   languages,
+  createId,
   idsEqual,
   Reader,
   Writer,
@@ -81,6 +82,18 @@ function positiveBigIntToMinimalTwosComplement(value: bigint): Uint8Array {
   const bytes = new Uint8Array(raw.length + 1);
   bytes.set(raw, 1);
   return bytes;
+}
+
+function testId(hex: string): Id {
+  const id = parseId(hex);
+  if (!id) {
+    throw new Error(`invalid test id: ${hex}`);
+  }
+
+  const bytes = new Uint8Array(id);
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  return createId(bytes);
 }
 
 describe("ID utilities", () => {
@@ -398,8 +411,8 @@ describe("Ops helpers", () => {
 
 describe("Builder vs Ops API Equivalence", () => {
   it("produces identical encoding for createEntity", () => {
-    const editId = parseId("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")!;
-    const entityId = parseId("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")!;
+    const editId = testId("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    const entityId = testId("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
 
     // Using EditBuilder
     const builderEdit = new EditBuilder(editId)
@@ -433,9 +446,9 @@ describe("Builder vs Ops API Equivalence", () => {
   });
 
   it("produces identical encoding for updateEntity", () => {
-    const editId = parseId("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")!;
-    const entityId = parseId("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")!;
-    const propId = parseId("cccccccccccccccccccccccccccccccc")!;
+    const editId = testId("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    const entityId = testId("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
+    const propId = testId("cccccccccccccccccccccccccccccccc");
 
     // Using EditBuilder
     const builderEdit = new EditBuilder(editId)
@@ -469,10 +482,10 @@ describe("Builder vs Ops API Equivalence", () => {
   });
 
   it("produces identical encoding for createRelation", () => {
-    const editId = parseId("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")!;
-    const relationId = parseId("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")!;
-    const from = parseId("cccccccccccccccccccccccccccccccc")!;
-    const to = parseId("dddddddddddddddddddddddddddddddd")!;
+    const editId = testId("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    const relationId = testId("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
+    const from = testId("cccccccccccccccccccccccccccccccc");
+    const to = testId("dddddddddddddddddddddddddddddddd");
 
     // Using EditBuilder
     const builderEdit = new EditBuilder(editId)
@@ -504,9 +517,9 @@ describe("Builder vs Ops API Equivalence", () => {
   });
 
   it("produces identical encoding for delete/restore operations", () => {
-    const editId = parseId("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")!;
-    const entityId = parseId("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")!;
-    const relationId = parseId("cccccccccccccccccccccccccccccccc")!;
+    const editId = testId("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    const entityId = testId("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
+    const relationId = testId("cccccccccccccccccccccccccccccccc");
 
     // Using EditBuilder
     const builderEdit = new EditBuilder(editId)
@@ -539,12 +552,12 @@ describe("Builder vs Ops API Equivalence", () => {
   });
 
   it("produces identical encoding for complex multi-op edits", () => {
-    const editId = parseId("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")!;
-    const authorId = parseId("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")!;
-    const entity1 = parseId("11111111111111111111111111111111")!;
-    const entity2 = parseId("22222222222222222222222222222222")!;
-    const relationId = parseId("33333333333333333333333333333333")!;
-    const propId = parseId("44444444444444444444444444444444")!;
+    const editId = testId("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    const authorId = testId("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
+    const entity1 = testId("11111111111111111111111111111111");
+    const entity2 = testId("22222222222222222222222222222222");
+    const relationId = testId("33333333333333333333333333333333");
+    const propId = testId("44444444444444444444444444444444");
 
     // Using EditBuilder
     const builderEdit = new EditBuilder(editId)
@@ -609,8 +622,8 @@ describe("Builder vs Ops API Equivalence", () => {
   });
 
   it("produces identical encoding for updateRelation", () => {
-    const editId = parseId("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")!;
-    const relationId = parseId("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")!;
+    const editId = testId("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    const relationId = testId("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
 
     // Using EditBuilder
     const builderEdit = new EditBuilder(editId)
@@ -658,7 +671,20 @@ describe("Codec", () => {
       )
       .build();
 
-    expect(() => encodeEdit(edit)).toThrow("[E005] invalid id for edit.authors[0]");
+    expect(() => encodeEdit(edit)).toThrow("[E005] invalid UUID for edit.authors[0]");
+  });
+
+  it("throws when encoding an ID with invalid UUID bits", () => {
+    const entityId = randomId();
+    const invalidId = createId(new Uint8Array(16).fill(0xaa));
+
+    const edit = new EditBuilder(invalidId)
+      .createEntity(entityId, (e) =>
+        e.text(properties.name(), "Test", undefined)
+      )
+      .build();
+
+    expect(() => encodeEdit(edit)).toThrow("[E005] invalid UUID for edit.id");
   });
 
   it("throws when encoding a context with wrong length rootId", () => {
@@ -688,7 +714,7 @@ describe("Codec", () => {
       ],
     };
 
-    expect(() => encodeEdit(edit)).toThrow("[E005] invalid id for op[0].context.rootId");
+    expect(() => encodeEdit(edit)).toThrow("[E005] invalid UUID for op[0].context.rootId");
   });
 
   it("encodes and decodes a simple edit", () => {
@@ -700,7 +726,7 @@ describe("Codec", () => {
       .setCreatedAt(1234567890000000n)
       .createEntity(entityId, (e) =>
         e.text(properties.name(), "Alice", undefined)
-         .boolean(parseId("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")!, true)
+         .boolean(testId("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"), true)
       )
       .build();
 
@@ -1078,14 +1104,14 @@ describe("Codec", () => {
     const edit = new EditBuilder(editId)
       .setName("All Types Test")
       .createEntity(entityId, (e) =>
-        e.boolean(parseId("11111111111111111111111111111111")!, true)
-         .integer(parseId("22222222222222222222222222222222")!, -42n, undefined)
-         .float(parseId("33333333333333333333333333333333")!, 3.14159, undefined)
-         .text(parseId("44444444444444444444444444444444")!, "Hello World", undefined)
-         .bytes(parseId("55555555555555555555555555555555")!, new Uint8Array([1, 2, 3, 4]))
-         .schedule(parseId("66666666666666666666666666666666")!, "FREQ=WEEKLY;BYDAY=MO")
-         .date(parseId("77777777777777777777777777777777")!, "2024-01-15Z")
-         .point(parseId("88888888888888888888888888888888")!, 40.7128, -74.006)
+        e.boolean(testId("11111111111111111111111111111111"), true)
+         .integer(testId("22222222222222222222222222222222"), -42n, undefined)
+         .float(testId("33333333333333333333333333333333"), 3.14159, undefined)
+         .text(testId("44444444444444444444444444444444"), "Hello World", undefined)
+         .bytes(testId("55555555555555555555555555555555"), new Uint8Array([1, 2, 3, 4]))
+         .schedule(testId("66666666666666666666666666666666"), "FREQ=WEEKLY;BYDAY=MO")
+         .date(testId("77777777777777777777777777777777"), "2024-01-15Z")
+         .point(testId("88888888888888888888888888888888"), 40.7128, -74.006)
       )
       .build();
 
@@ -1129,12 +1155,12 @@ describe("Codec", () => {
     const edit = new EditBuilder(editId)
       .setName("DateTime Test")
       .createEntity(entityId, (e) =>
-        e.date(parseId("11111111111111111111111111111111")!, "2024-01-15Z")
-         .date(parseId("22222222222222222222222222222222")!, "2024-06-30+05:30")
-         .time(parseId("33333333333333333333333333333333")!, "14:30:45.123456Z")
-         .time(parseId("44444444444444444444444444444444")!, "10:15:00-08:00")
-         .datetime(parseId("55555555555555555555555555555555")!, "2024-01-15T14:30:45.123456Z")
-         .datetime(parseId("66666666666666666666666666666666")!, "2024-12-31T23:59:59+05:30")
+        e.date(testId("11111111111111111111111111111111"), "2024-01-15Z")
+         .date(testId("22222222222222222222222222222222"), "2024-06-30+05:30")
+         .time(testId("33333333333333333333333333333333"), "14:30:45.123456Z")
+         .time(testId("44444444444444444444444444444444"), "10:15:00-08:00")
+         .datetime(testId("55555555555555555555555555555555"), "2024-01-15T14:30:45.123456Z")
+         .datetime(testId("66666666666666666666666666666666"), "2024-12-31T23:59:59+05:30")
       )
       .build();
 
@@ -1238,8 +1264,8 @@ describe("Codec", () => {
   });
 
   it("canonical encoding is deterministic", () => {
-    const editId = parseId("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")!;
-    const entityId = parseId("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")!;
+    const editId = testId("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    const entityId = testId("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
 
     const edit = new EditBuilder(editId)
       .setName("Canonical Test")
@@ -1765,8 +1791,8 @@ describe("Codec", () => {
     });
   
     it("compressed canonical encoding roundtrips", async () => {
-      const editId = parseId("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")!;
-      const entityId = parseId("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")!;
+      const editId = testId("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+      const entityId = testId("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
   
       const edit = new EditBuilder(editId)
         .setName("Canonical Compressed Test")

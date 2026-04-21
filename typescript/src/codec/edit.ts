@@ -2,6 +2,7 @@ import { compareIds, idsEqual, type Id } from "../types/id.js";
 import type { Context, ContextEdge, Edit, WireDictionaries } from "../types/edit.js";
 import type { Op, UnsetLanguage } from "../types/op.js";
 import { DataType, valueDataType, type PropertyValue } from "../types/value.js";
+import { isValidUuidBytes } from "../util/id.js";
 import { DecodeError, EncodeError, Reader, Writer } from "./primitives.js";
 import { decodeOp, encodeOp, type OpDictionaryIndices, type OpDictionaryLookups } from "./op.js";
 
@@ -30,8 +31,8 @@ export interface EncodeOptions {
 }
 
 function assertId(value: unknown, context: string): asserts value is Id {
-  if (!(value instanceof Uint8Array) || value.length !== 16) {
-    throw new EncodeError("E005", `invalid id for ${context}`);
+  if (!(value instanceof Uint8Array) || !isValidUuidBytes(value)) {
+    throw new EncodeError("E005", `invalid UUID for ${context}`);
   }
 }
 
