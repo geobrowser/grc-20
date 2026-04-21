@@ -1,16 +1,19 @@
 /**
- * RFC 3339 date/time parsing and formatting utilities.
+ * ISO 8601/RFC 3339 date/time parsing and formatting utilities.
  *
- * Converts between RFC 3339 formatted strings and GRC-20 internal representations:
+ * Converts between GRC-20 temporal strings and internal representations:
  * - Date: days since Unix epoch (1970-01-01) + offset in minutes
  * - Time: microseconds since midnight + offset in minutes
  * - Datetime: microseconds since Unix epoch + offset in minutes
+ *
+ * DATE and DATETIME use ISO 8601 extended forms with astronomical year numbering
+ * and expanded years. TIME keeps the RFC 3339-compatible clock syntax.
  */
 
 const MICROSECONDS_PER_SECOND = 1_000_000n;
 const MICROSECONDS_PER_MINUTE = 60n * MICROSECONDS_PER_SECOND;
 const MICROSECONDS_PER_HOUR = 60n * MICROSECONDS_PER_MINUTE;
-const MILLISECONDS_PER_DAY = 24 * 60 * 60 * 1000;
+const MICROSECONDS_PER_DAY = 24n * 60n * 60n * 1_000_000n;
 
 /**
  * Parses a timezone offset string (Z, +HH:MM, -HH:MM) and returns offset in minutes.
@@ -84,54 +87,149 @@ function formatFractionalSeconds(us: bigint): string {
   return `.${trimmed}`;
 }
 
+function isLeapYear(year: number): boolean {
+  return (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0;
+}
+
+function daysInMonth(year: number, month: number): number {
+  switch (month) {
+    case 1:
+    case 3:
+    case 5:
+    case 7:
+    case 8:
+    case 10:
+    case 12:
+      return 31;
+    case 4:
+    case 6:
+    case 9:
+    case 11:
+      return 30;
+    case 2:
+      return isLeapYear(year) ? 29 : 28;
+    default:
+      return 0;
+  }
+}
+
+function dateToDays(year: number, month: number, day: number): number {
+  const y = month <= 2 ? year - 1 : year;
+  const m = month <= 2 ? month + 9 : month - 3;
+  const era = Math.trunc((y >= 0 ? y : y - 399) / 400);
+  const yoe = y - era * 400;
+  const doy = Math.floor((153 * m + 2) / 5) + day - 1;
+  const doe = yoe * 365 + Math.floor(yoe / 4) - Math.floor(yoe / 100) + doy;
+  return era * 146097 + doe - 719468;
+}
+
+function daysToDate(days: number): { year: number; month: number; day: number } {
+  const z = days + 719468;
+  const era = Math.trunc((z >= 0 ? z : z - 146096) / 146097);
+  const doe = z - era * 146097;
+  const yoe = Math.floor((doe - Math.floor(doe / 1460) + Math.floor(doe / 36524) - Math.floor(doe / 146096)) / 365);
+  const y = yoe + era * 400;
+  const doy = doe - (365 * yoe + Math.floor(yoe / 4) - Math.floor(yoe / 100));
+  const mp = Math.floor((5 * doy + 2) / 153);
+  const day = doy - Math.floor((153 * mp + 2) / 5) + 1;
+  const month = mp < 10 ? mp + 3 : mp - 9;
+  const year = month <= 2 ? y + 1 : y;
+  return { year, month, day };
+}
+
+function parseCalendarYearPrefix(input: string, context: string): { year: number; firstDash: number } {
+  const signed = input.startsWith("+") || input.startsWith("-");
+  const digitStart = signed ? 1 : 0;
+  const firstDash = input.indexOf("-", digitStart);
+  if (firstDash === -1) {
+    throw new Error(`Invalid ${context}: ${input}`);
+  }
+
+  const yearDigits = input.slice(digitStart, firstDash);
+  if (yearDigits.length < 4 || (!signed && yearDigits.length !== 4) || !/^\d+$/.test(yearDigits)) {
+    throw new Error(`Invalid year in ${context}: ${input}`);
+  }
+
+  const year = parseInt(input.slice(0, firstDash), 10);
+  if (!Number.isInteger(year)) {
+    throw new Error(`Invalid year in ${context}: ${input}`);
+  }
+
+  return { year, firstDash };
+}
+
+function parseCalendarDatePrefix(
+  input: string,
+  context: string
+): { year: number; month: number; day: number; consumed: number } {
+  const { year, firstDash } = parseCalendarYearPrefix(input, context);
+  if (input.length < firstDash + 6 || input[firstDash + 3] !== "-") {
+    throw new Error(`Invalid ${context}: ${input}`);
+  }
+
+  const month = parseInt(input.slice(firstDash + 1, firstDash + 3), 10);
+  const day = parseInt(input.slice(firstDash + 4, firstDash + 6), 10);
+
+  if (month < 1 || month > 12) {
+    throw new Error(`Invalid month in ${context}: ${input}`);
+  }
+  if (day < 1 || day > daysInMonth(year, month)) {
+    throw new Error(`Invalid day in ${context}: ${input}`);
+  }
+
+  return { year, month, day, consumed: firstDash + 6 };
+}
+
+function formatCalendarYear(year: number): string {
+  if (year >= 0 && year <= 9999) {
+    return year.toString().padStart(4, "0");
+  }
+  if (year < 0) {
+    return `-${Math.abs(year).toString().padStart(4, "0")}`;
+  }
+  return `+${year.toString().padStart(5, "0")}`;
+}
+
+function floorDivBigInt(value: bigint, divisor: bigint): bigint {
+  let quotient = value / divisor;
+  const remainder = value % divisor;
+  if (remainder < 0n) {
+    quotient -= 1n;
+  }
+  return quotient;
+}
+
 // =====================
 // DATE functions
 // =====================
 
 /**
- * Parses an RFC 3339 date string (YYYY-MM-DD) and returns days since Unix epoch.
- * Optionally accepts timezone offset suffix for date-with-offset format.
+ * Parses a GRC-20 DATE string and returns days since Unix epoch.
+ *
+ * DATE strings use ISO 8601 extended calendar dates with astronomical year
+ * numbering and expanded years. Examples:
+ * - `2024-03-15`
+ * - `0000-01-01Z`
+ * - `-0001-12-31+05:30`
+ * - `+12024-03-15Z`
  */
 export function parseDateRfc3339(dateStr: string): { days: number; offsetMin: number } {
-  // Match YYYY-MM-DD with optional timezone offset
-  const match = dateStr.match(/^(\d{4})-(\d{2})-(\d{2})(?:(Z|[+-]\d{2}:\d{2}))?$/);
-  if (!match) {
-    throw new Error(`Invalid RFC 3339 date: ${dateStr}`);
-  }
-
-  const year = parseInt(match[1], 10);
-  const month = parseInt(match[2], 10);
-  const day = parseInt(match[3], 10);
-  const offsetStr = match[4];
-
-  // Validate month and day
-  if (month < 1 || month > 12) {
-    throw new Error(`Invalid month in date: ${dateStr}`);
-  }
-  if (day < 1 || day > 31) {
-    throw new Error(`Invalid day in date: ${dateStr}`);
-  }
-
-  // Calculate days since epoch using UTC Date
-  const date = Date.UTC(year, month - 1, day);
-  const days = Math.floor(date / MILLISECONDS_PER_DAY);
-
+  const { year, month, day, consumed } = parseCalendarDatePrefix(dateStr, "ISO 8601 date");
+  const days = dateToDays(year, month, day);
+  const offsetStr = dateStr.slice(consumed);
   const offsetMin = offsetStr ? parseTimezoneOffset(offsetStr) : 0;
 
   return { days, offsetMin };
 }
 
 /**
- * Formats days since Unix epoch as RFC 3339 date string.
+ * Formats days since Unix epoch as a canonical GRC-20 DATE string.
  */
 export function formatDateRfc3339(days: number, offsetMin: number = 0): string {
-  const date = new Date(days * MILLISECONDS_PER_DAY);
-  const year = date.getUTCFullYear();
-  const month = (date.getUTCMonth() + 1).toString().padStart(2, "0");
-  const day = date.getUTCDate().toString().padStart(2, "0");
+  const { year, month, day } = daysToDate(days);
 
   const offset = formatTimezoneOffset(offsetMin);
-  return `${year}-${month}-${day}${offset}`;
+  return `${formatCalendarYear(year)}-${month.toString().padStart(2, "0")}-${day.toString().padStart(2, "0")}${offset}`;
 }
 
 // =====================
@@ -216,40 +314,38 @@ export function formatTimeRfc3339(timeMicros: bigint, offsetMin: number = 0): st
 // =====================
 
 /**
- * Parses an RFC 3339 datetime string and returns microseconds since Unix epoch
+ * Parses a GRC-20 DATETIME string and returns microseconds since Unix epoch
  * and offset in minutes.
  *
- * Spec: DATETIME value definition (spec.md "DATETIME" section) requires offset_min;
- * reject inputs without explicit timezone (Z or ±HH:MM).
+ * DATETIME strings use ISO 8601 extended calendar dates with astronomical year
+ * numbering and expanded years, plus RFC 3339-compatible time and offset syntax.
+ * The offset is required.
  */
 export function parseDatetimeRfc3339(datetimeStr: string): { epochMicros: bigint; offsetMin: number } {
-  // Match YYYY-MM-DDTHH:MM:SS[.fractional][timezone]
-  const match = datetimeStr.match(
-    /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,6}))?(Z|[+-]\d{2}:\d{2})$/
-  );
-  if (!match) {
-    throw new Error(`Invalid RFC 3339 datetime: ${datetimeStr}`);
+  const { year, month, day, consumed } = parseCalendarDatePrefix(datetimeStr, "ISO 8601 datetime");
+  const separator = datetimeStr[consumed];
+  if (separator !== "T" && separator !== " ") {
+    throw new Error(`Invalid ISO 8601 datetime: ${datetimeStr}`);
   }
 
-  const year = parseInt(match[1], 10);
-  const month = parseInt(match[2], 10);
-  const day = parseInt(match[3], 10);
-  const hours = parseInt(match[4], 10);
-  const minutes = parseInt(match[5], 10);
-  const seconds = parseInt(match[6], 10);
-  const fractional = match[7];
-  const offsetStr = match[8];
+  const timeStr = datetimeStr.slice(consumed + 1);
+  const match = timeStr.match(
+    /^(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,6}))?(Z|[+-]\d{2}:\d{2})$/
+  );
+  if (!match) {
+    throw new Error(`Invalid ISO 8601 datetime: ${datetimeStr}`);
+  }
+
+  const hours = parseInt(match[1], 10);
+  const minutes = parseInt(match[2], 10);
+  const seconds = parseInt(match[3], 10);
+  const fractional = match[4];
+  const offsetStr = match[5];
   if (!offsetStr) {
     throw new Error(`Timezone offset required in datetime: ${datetimeStr}`);
   }
 
   // Validate ranges
-  if (month < 1 || month > 12) {
-    throw new Error(`Invalid month in datetime: ${datetimeStr}`);
-  }
-  if (day < 1 || day > 31) {
-    throw new Error(`Invalid day in datetime: ${datetimeStr}`);
-  }
   if (hours > 23) {
     throw new Error(`Invalid hours in datetime: ${datetimeStr}`);
   }
@@ -263,17 +359,13 @@ export function parseDatetimeRfc3339(datetimeStr: string): { epochMicros: bigint
   const offsetMin = parseTimezoneOffset(offsetStr);
   const microseconds = parseFractionalSeconds(fractional);
 
-  // Calculate epoch milliseconds in UTC
-  // Note: Date.UTC gives us milliseconds for the given UTC time components
-  const epochMs = Date.UTC(year, month - 1, day, hours, minutes, seconds);
+  const epochMicrosUTC =
+    BigInt(dateToDays(year, month, day)) * MICROSECONDS_PER_DAY +
+    BigInt(hours) * MICROSECONDS_PER_HOUR +
+    BigInt(minutes) * MICROSECONDS_PER_MINUTE +
+    BigInt(seconds) * MICROSECONDS_PER_SECOND +
+    microseconds;
 
-  // Convert to microseconds and add fractional component
-  // The epochMs is in UTC, but the datetime string represents local time with offset
-  // We need to subtract the offset to get the actual UTC time
-  const epochMicrosUTC = BigInt(epochMs) * 1000n + microseconds;
-
-  // Adjust for timezone offset: local time + offset = UTC
-  // So: UTC = local - offset
   const offsetUs = BigInt(offsetMin) * MICROSECONDS_PER_MINUTE;
   const epochMicros = epochMicrosUTC - offsetUs;
 
@@ -281,30 +373,29 @@ export function parseDatetimeRfc3339(datetimeStr: string): { epochMicros: bigint
 }
 
 /**
- * Formats microseconds since Unix epoch as RFC 3339 datetime string.
+ * Formats microseconds since Unix epoch as a canonical GRC-20 DATETIME string.
  */
 export function formatDatetimeRfc3339(epochMicros: bigint, offsetMin: number = 0): string {
-  // Adjust for timezone offset: local time = UTC + offset
   const offsetUs = BigInt(offsetMin) * MICROSECONDS_PER_MINUTE;
   const localUs = epochMicros + offsetUs;
 
-  // Convert to milliseconds for Date constructor
-  const epochMs = Number(localUs / 1000n);
-  const microseconds = localUs % 1_000_000n;
-  // Handle negative microseconds (modulo can be negative in JS for negative numbers)
-  const microsecondsPositive = microseconds < 0n ? microseconds + 1_000_000n : microseconds;
+  const days = floorDivBigInt(localUs, MICROSECONDS_PER_DAY);
+  const timeMicros = localUs - days * MICROSECONDS_PER_DAY;
+  const { year, month, day } = daysToDate(Number(days));
 
-  const date = new Date(epochMs);
+  const hours = timeMicros / MICROSECONDS_PER_HOUR;
+  const remaining1 = timeMicros % MICROSECONDS_PER_HOUR;
+  const minutes = remaining1 / MICROSECONDS_PER_MINUTE;
+  const remaining2 = remaining1 % MICROSECONDS_PER_MINUTE;
+  const seconds = remaining2 / MICROSECONDS_PER_SECOND;
+  const microseconds = remaining2 % MICROSECONDS_PER_SECOND;
 
-  const year = date.getUTCFullYear();
-  const month = (date.getUTCMonth() + 1).toString().padStart(2, "0");
-  const day = date.getUTCDate().toString().padStart(2, "0");
-  const hours = date.getUTCHours().toString().padStart(2, "0");
-  const minutes = date.getUTCMinutes().toString().padStart(2, "0");
-  const seconds = date.getUTCSeconds().toString().padStart(2, "0");
-
-  const frac = formatFractionalSeconds(microsecondsPositive);
+  const frac = formatFractionalSeconds(microseconds);
   const offset = formatTimezoneOffset(offsetMin);
 
-  return `${year}-${month}-${day}T${hours}:${minutes}:${seconds}${frac}${offset}`;
+  return `${formatCalendarYear(year)}-${month.toString().padStart(2, "0")}-${day
+    .toString()
+    .padStart(2, "0")}T${hours.toString().padStart(2, "0")}:${minutes
+    .toString()
+    .padStart(2, "0")}:${seconds.toString().padStart(2, "0")}${frac}${offset}`;
 }

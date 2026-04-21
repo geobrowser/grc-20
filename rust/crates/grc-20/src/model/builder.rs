@@ -345,10 +345,10 @@ impl<'a> EntityBuilder<'a> {
         self
     }
 
-    /// Adds a DATE value in RFC 3339 format.
+    /// Adds a DATE value in ISO 8601 extended format.
     ///
     /// # Arguments
-    /// * `value` - RFC 3339 date string (e.g., "2024-01-15" or "2024-01-15+05:30")
+    /// * `value` - ISO 8601 date string (e.g., "2024-01-15Z" or "0000-01-01Z")
     pub fn date(mut self, property: Id, value: impl Into<Cow<'a, str>>) -> Self {
         self.values.push(PropertyValue {
             property,
@@ -369,10 +369,10 @@ impl<'a> EntityBuilder<'a> {
         self
     }
 
-    /// Adds a DATETIME value in RFC 3339 format.
+    /// Adds a DATETIME value in ISO 8601 extended format.
     ///
     /// # Arguments
-    /// * `value` - RFC 3339 datetime string (e.g., "2024-01-15T14:30:45.123456Z")
+    /// * `value` - ISO 8601 datetime string (e.g., "2024-01-15T14:30:45.123456Z" or "+12024-01-15T14:30:45.123456Z")
     pub fn datetime(mut self, property: Id, value: impl Into<Cow<'a, str>>) -> Self {
         self.values.push(PropertyValue {
             property,
@@ -502,10 +502,10 @@ impl<'a> UpdateEntityBuilder<'a> {
         self
     }
 
-    /// Sets a DATE value in RFC 3339 format.
+    /// Sets a DATE value in ISO 8601 extended format.
     ///
     /// # Arguments
-    /// * `value` - RFC 3339 date string (e.g., "2024-01-15" or "2024-01-15+05:30")
+    /// * `value` - ISO 8601 date string (e.g., "2024-01-15Z" or "0000-01-01Z")
     pub fn set_date(mut self, property: Id, value: impl Into<Cow<'a, str>>) -> Self {
         self.set_properties.push(PropertyValue {
             property,
@@ -526,10 +526,10 @@ impl<'a> UpdateEntityBuilder<'a> {
         self
     }
 
-    /// Sets a DATETIME value in RFC 3339 format.
+    /// Sets a DATETIME value in ISO 8601 extended format.
     ///
     /// # Arguments
-    /// * `value` - RFC 3339 datetime string (e.g., "2024-01-15T14:30:45.123456Z")
+    /// * `value` - ISO 8601 datetime string (e.g., "2024-01-15T14:30:45.123456Z" or "+12024-01-15T14:30:45.123456Z")
     pub fn set_datetime(mut self, property: Id, value: impl Into<Cow<'a, str>>) -> Self {
         self.set_properties.push(PropertyValue {
             property,
@@ -948,9 +948,9 @@ mod tests {
                     .float([4u8; 16], 3.14, None)
                     .boolean([5u8; 16], true)
                     .point([6u8; 16], -74.0060, 40.7128, None)
-                    .date([7u8; 16], "2024-01-15Z") // RFC 3339 date
+                    .date([7u8; 16], "2024-01-15Z") // ISO 8601 date
                     .time([10u8; 16], "14:30:00Z") // RFC 3339 time
-                    .datetime([11u8; 16], "2024-01-15T14:30:00Z") // RFC 3339 datetime
+                    .datetime([11u8; 16], "2024-01-15T14:30:00Z") // ISO 8601 datetime
                     .schedule([8u8; 16], "BEGIN:VEVENT\r\nDTSTART:20240315T090000Z\r\nEND:VEVENT")
                     .bytes([9u8; 16], vec![1, 2, 3, 4])
             })

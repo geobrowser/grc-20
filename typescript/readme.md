@@ -119,9 +119,9 @@ const edit = new EditBuilder(editId)
     .boolean(propId, true)
     .bytes(propId, new Uint8Array([1, 2, 3]))
     .point(propId, 40.7128, -74.006)
-    .date(propId, "2024-01-15Z")             // RFC 3339 date
+    .date(propId, "2024-01-15Z")             // ISO 8601 date
     .time(propId, "10:30:00Z")               // RFC 3339 time
-    .datetime(propId, "2024-01-15T10:30:00Z")// RFC 3339 datetime
+    .datetime(propId, "2024-01-15T10:30:00Z")// ISO 8601 datetime
   )
   .updateEntity(entityId, u => u
     .setText(propId, "new value", undefined)
@@ -295,9 +295,9 @@ if (!posResult.valid) {
 | `DECIMAL` | `{ type: "decimal", exponent: number, mantissa: bigint, unit?: Id }` |
 | `TEXT` | `{ type: "text", value: string, language?: Id }` |
 | `BYTES` | `{ type: "bytes", value: Uint8Array }` |
-| `DATE` | `{ type: "date", value: string }` (RFC 3339, e.g. `"2024-01-15Z"`) |
+| `DATE` | `{ type: "date", value: string }` (ISO 8601 with expanded years, e.g. `"2024-01-15Z"` or `"0000-01-01Z"`) |
 | `TIME` | `{ type: "time", value: string }` (RFC 3339, e.g. `"14:30:00Z"`) |
-| `DATETIME` | `{ type: "datetime", value: string }` (RFC 3339, e.g. `"2024-01-15T14:30:00Z"`) |
+| `DATETIME` | `{ type: "datetime", value: string }` (ISO 8601 with expanded years, e.g. `"2024-01-15T14:30:00Z"` or `"+12024-01-15T14:30:00Z"`) |
 | `SCHEDULE` | `{ type: "schedule", value: string }` (RFC 5545/7953 iCalendar) |
 | `POINT` | `{ type: "point", lat: number, lon: number, alt?: number }` |
 | `RECT` | `{ type: "rect", minLat: number, minLon: number, maxLat: number, maxLon: number }` |

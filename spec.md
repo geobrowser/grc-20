@@ -233,6 +233,8 @@ The `days` field represents the calendar date as days since 1970-01-01. The `off
 
 > **NORMATIVE:** DATE values sort by `days` first, then by `offset_min` (both as signed integers).
 
+> **NORMATIVE:** Public string APIs for DATE values MUST use ISO 8601 extended calendar dates with optional UTC offsets (for example `2024-03-15Z`, `0000-01-01Z`, `-0001-12-31+05:30`, `+12024-03-15Z`). Years use astronomical numbering: `0001` = 1 CE, `0000` = 1 BCE, `-0001` = 2 BCE. Positive years greater than `9999` MUST include a leading `+`.
+
 #### TIME
 
 Time of day represented as a fixed 8-byte binary value.
@@ -263,6 +265,8 @@ The `time_micros` field represents microseconds since midnight in the local time
 
 > **NORMATIVE:** TIME values sort by their UTC-normalized instant (`time_micros - offset_min * 60_000_000`). Tie-break by `offset_min`.
 
+> **NORMATIVE:** Public string APIs for TIME values use RFC 3339-compatible time-of-day syntax with a required UTC offset (for example `14:30:00Z` or `14:30:00.123456+05:30`).
+
 #### DATETIME
 
 Combined date and time represented as a fixed 10-byte binary value.
@@ -289,6 +293,8 @@ The `epoch_micros` field represents the instant in UTC. The `offset_min` preserv
 > **NORMATIVE:** Implementations MUST reject `offset_min` outside range [-1440, +1440] (±24 hours).
 
 > **NORMATIVE:** DATETIME values sort by `epoch_micros` first, then by `offset_min` (both as signed integers).
+
+> **NORMATIVE:** Public string APIs for DATETIME values MUST use ISO 8601 extended calendar dates with astronomical year numbering and expanded years, combined with RFC 3339-compatible time and UTC offset syntax (for example `2024-03-15T14:30:00Z`, `0000-01-01T00:00:00Z`, `-0001-12-31T23:59:59+05:30`, `+12024-03-15T10:30:00Z`).
 
 #### SCHEDULE
 

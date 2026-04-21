@@ -80,10 +80,10 @@ All 13 GRC-20 data types are supported:
 | RECT | `Value::Rect { min_lat, min_lon, max_lat, max_lon }` | 32 bytes |
 | EMBEDDING | `Value::Embedding { sub_type, dims, data }` | variable |
 
-**Temporal types use RFC 3339 strings in the API:**
-- `DATE`: RFC 3339 date string (e.g., `"2024-01-15"` or `"2024-01-15+05:30"`)
+**Temporal types use string forms in the API:**
+- `DATE`: ISO 8601 calendar date with optional offset and expanded years (e.g., `"2024-01-15Z"` or `"0000-01-01Z"`)
 - `TIME`: RFC 3339 time string (e.g., `"14:30:00Z"` or `"14:30:00.123456+05:30"`)
-- `DATETIME`: RFC 3339 datetime string (e.g., `"2024-01-15T14:30:00Z"`)
+- `DATETIME`: ISO 8601 datetime with expanded years (e.g., `"2024-01-15T14:30:00Z"` or `"+12024-01-15T14:30:00Z"`)
 
 The codec converts these to/from the binary wire format internally.
 

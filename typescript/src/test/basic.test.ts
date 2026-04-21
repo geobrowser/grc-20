@@ -1122,7 +1122,7 @@ describe("Codec", () => {
     }
   });
 
-  it("encodes and decodes RFC 3339 date/time/datetime values", () => {
+  it("encodes and decodes date/time/datetime values, including BCE and expanded years", () => {
     const editId = randomId();
     const entityId = randomId();
 
@@ -1131,10 +1131,13 @@ describe("Codec", () => {
       .createEntity(entityId, (e) =>
         e.date(parseId("11111111111111111111111111111111")!, "2024-01-15Z")
          .date(parseId("22222222222222222222222222222222")!, "2024-06-30+05:30")
+         .date(parseId("23232323232323232323232323232323")!, "0000-01-01Z")
          .time(parseId("33333333333333333333333333333333")!, "14:30:45.123456Z")
          .time(parseId("44444444444444444444444444444444")!, "10:15:00-08:00")
          .datetime(parseId("55555555555555555555555555555555")!, "2024-01-15T14:30:45.123456Z")
          .datetime(parseId("66666666666666666666666666666666")!, "2024-12-31T23:59:59+05:30")
+         .datetime(parseId("67676767676767676767676767676767")!, "-0001-12-31T23:59:59Z")
+         .datetime(parseId("68686868686868686868686868686868")!, "+12024-03-15T10:30:00Z")
       )
       .build();
 
@@ -1146,7 +1149,7 @@ describe("Codec", () => {
     expect(op.type).toBe("createEntity");
 
     if (op.type === "createEntity") {
-      expect(op.values.length).toBe(6);
+      expect(op.values.length).toBe(9);
 
       // Check date values
       const dateVal1 = op.values.find(v =>
@@ -1156,6 +1159,10 @@ describe("Codec", () => {
       const dateVal2 = op.values.find(v =>
         v.value.type === "date" && v.value.value === "2024-06-30+05:30");
       expect(dateVal2).toBeDefined();
+
+      const dateVal3 = op.values.find(v =>
+        v.value.type === "date" && v.value.value === "0000-01-01Z");
+      expect(dateVal3).toBeDefined();
 
       // Check time values
       const timeVal1 = op.values.find(v =>
@@ -1174,6 +1181,14 @@ describe("Codec", () => {
       const dtVal2 = op.values.find(v =>
         v.value.type === "datetime" && v.value.value === "2024-12-31T23:59:59+05:30");
       expect(dtVal2).toBeDefined();
+
+      const dtVal3 = op.values.find(v =>
+        v.value.type === "datetime" && v.value.value === "-0001-12-31T23:59:59Z");
+      expect(dtVal3).toBeDefined();
+
+      const dtVal4 = op.values.find(v =>
+        v.value.type === "datetime" && v.value.value === "+12024-03-15T10:30:00Z");
+      expect(dtVal4).toBeDefined();
     }
   });
 

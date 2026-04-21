@@ -71,7 +71,7 @@ export function encodeValuePayload(writer: Writer, value: Value): void {
       break;
 
     case "date": {
-      // Parse RFC 3339 date string
+      // Parse ISO 8601 date string
       const { days, offsetMin } = parseDateRfc3339(value.value);
       // DATE: 6 bytes (int32 days + int16 offset_min), little-endian
       writer.writeInt32LE(days);
@@ -89,7 +89,7 @@ export function encodeValuePayload(writer: Writer, value: Value): void {
     }
 
     case "datetime": {
-      // Parse RFC 3339 datetime string
+      // Parse ISO 8601 datetime string
       const { epochMicros, offsetMin } = parseDatetimeRfc3339(value.value);
       // DATETIME: 10 bytes (int64 epoch_micros + int16 offset_min), little-endian
       writer.writeInt64LE(epochMicros);
@@ -563,7 +563,7 @@ export function decodeValuePayload(reader: Reader, dataType: DataType): Value {
       if (offsetMin < -1440 || offsetMin > 1440) {
         throw new DecodeError("E005", "DATE offsetMin outside range [-1440, +1440]");
       }
-      // Format as RFC 3339
+      // Format as canonical GRC-20 DATE string
       const value = formatDateRfc3339(days, offsetMin);
       return { type: "date", value };
     }
@@ -593,7 +593,7 @@ export function decodeValuePayload(reader: Reader, dataType: DataType): Value {
       if (offsetMin < -1440 || offsetMin > 1440) {
         throw new DecodeError("E005", "DATETIME offsetMin outside range [-1440, +1440]");
       }
-      // Format as RFC 3339
+      // Format as canonical GRC-20 DATETIME string
       const value = formatDatetimeRfc3339(epochMicros, offsetMin);
       return { type: "datetime", value };
     }

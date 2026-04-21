@@ -99,7 +99,7 @@ export class EntityBuilder {
 
   /**
    * Adds a DATE value.
-   * @param value - RFC 3339 date string (e.g., "2024-01-15" or "2024-01-15+05:30")
+   * @param value - ISO 8601 date string (e.g., "2024-01-15Z" or "0000-01-01Z")
    */
   date(property: Id, value: string): this {
     this.values.push({
@@ -123,7 +123,7 @@ export class EntityBuilder {
 
   /**
    * Adds a DATETIME value.
-   * @param value - RFC 3339 datetime string (e.g., "2024-01-15T14:30:45.123456Z")
+   * @param value - ISO 8601 datetime string (e.g., "2024-01-15T14:30:45.123456Z" or "+12024-01-15T14:30:45.123456Z")
    */
   datetime(property: Id, value: string): this {
     this.values.push({

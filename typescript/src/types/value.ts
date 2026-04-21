@@ -68,9 +68,9 @@ export type Value =
   | { type: "text"; value: string; language?: Id }
   | { type: "bytes"; value: Uint8Array }
   | {
-      /** Calendar date in RFC 3339 format (YYYY-MM-DD with optional timezone). */
+      /** Calendar date in ISO 8601 extended format with astronomical year numbering. */
       type: "date";
-      /** RFC 3339 date string (e.g., "2024-01-15" or "2024-01-15+05:30"). */
+      /** ISO 8601 date string (e.g., "2024-01-15Z", "0000-01-01Z", or "+12024-01-15Z"). */
       value: string;
     }
   | {
@@ -80,9 +80,9 @@ export type Value =
       value: string;
     }
   | {
-      /** Combined date and time in RFC 3339 format. */
+      /** Combined date and time in ISO 8601 extended format. */
       type: "datetime";
-      /** RFC 3339 datetime string (e.g., "2024-01-15T14:30:45.123456Z"). */
+      /** ISO 8601 datetime string (e.g., "2024-01-15T14:30:45.123456Z" or "+12024-01-15T14:30:45.123456Z"). */
       value: string;
     }
   | { type: "schedule"; value: string }
@@ -197,7 +197,7 @@ export function validateValue(value: Value): string | undefined {
       try {
         parseDateRfc3339(value.value);
       } catch (e) {
-        return e instanceof Error ? e.message : "Invalid RFC 3339 date";
+        return e instanceof Error ? e.message : "Invalid ISO 8601 date";
       }
       break;
     case "time":
@@ -211,7 +211,7 @@ export function validateValue(value: Value): string | undefined {
       try {
         parseDatetimeRfc3339(value.value);
       } catch (e) {
-        return e instanceof Error ? e.message : "Invalid RFC 3339 datetime";
+        return e instanceof Error ? e.message : "Invalid ISO 8601 datetime";
       }
       break;
     case "embedding": {

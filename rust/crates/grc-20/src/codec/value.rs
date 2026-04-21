@@ -336,7 +336,7 @@ fn decode_date<'a>(reader: &mut Reader<'a>) -> Result<Value<'a>, DecodeError> {
         });
     }
 
-    // Format as RFC 3339 string
+    // Format as canonical GRC-20 DATE string
     let value = format_date_rfc3339(days, offset_min);
     Ok(Value::Date(Cow::Owned(value)))
 }
@@ -392,7 +392,7 @@ fn decode_datetime<'a>(reader: &mut Reader<'a>) -> Result<Value<'a>, DecodeError
         });
     }
 
-    // Format as RFC 3339 string
+    // Format as canonical GRC-20 DATETIME string
     let value = format_datetime_rfc3339(epoch_micros, offset_min);
     Ok(Value::Datetime(Cow::Owned(value)))
 }
@@ -601,10 +601,10 @@ pub fn encode_value(
             writer.write_bytes_prefixed(bytes);
         }
         Value::Date(s) => {
-            // Parse RFC 3339 date string
+            // Parse ISO 8601 date string
             let (days, offset_min) =
                 parse_date_rfc3339(s).map_err(|_| EncodeError::InvalidInput {
-                    context: "Invalid RFC 3339 date format",
+                    context: "Invalid ISO 8601 date format",
                 })?;
             // DATE: 6 bytes (int32 days + int16 offset_min), little-endian
             writer.write_bytes(&days.to_le_bytes());
@@ -629,10 +629,10 @@ pub fn encode_value(
             writer.write_bytes(&offset_min.to_le_bytes());
         }
         Value::Datetime(s) => {
-            // Parse RFC 3339 datetime string
+            // Parse ISO 8601 datetime string
             let (epoch_micros, offset_min) =
                 parse_datetime_rfc3339(s).map_err(|_| EncodeError::InvalidInput {
-                    context: "Invalid RFC 3339 datetime format",
+                    context: "Invalid ISO 8601 datetime format",
                 })?;
             // DATETIME: 10 bytes (int64 epoch_micros + int16 offset_min), little-endian
             writer.write_bytes(&epoch_micros.to_le_bytes());
@@ -1473,12 +1473,15 @@ mod tests {
         let dicts = WireDictionaries::default();
         let mut dict_builder = DictionaryBuilder::new();
 
-        // Test various date values (RFC 3339 format)
+        // Test various date values, including BCE and expanded years
         let test_cases = [
             "1970-01-01Z",      // Unix epoch, UTC
             "2024-03-15Z",      // March 15, 2024 UTC
             "2024-03-15+05:30", // March 15, 2024 +05:30
             "2024-03-15-08:00", // March 15, 2024 -08:00
+            "0000-01-01Z",      // 1 BCE
+            "-0001-12-31Z",     // 2 BCE
+            "+12024-03-15Z",    // Expanded positive year
         ];
 
         for date_str in test_cases {
@@ -1548,12 +1551,15 @@ mod tests {
         let dicts = WireDictionaries::default();
         let mut dict_builder = DictionaryBuilder::new();
 
-        // Test various datetime values (RFC 3339 format)
+        // Test various datetime values, including BCE and expanded years
         let test_cases = [
             "1970-01-01T00:00:00Z",        // Unix epoch UTC
             "2024-03-15T14:30:00Z",        // 2024-03-15T14:30:00Z
             "2024-03-15T14:30:00+05:30",   // 2024-03-15T14:30:00+05:30
             "2024-03-15T14:30:00.123456Z", // With microseconds
+            "0000-01-01T00:00:00Z",        // 1 BCE
+            "-0001-12-31T23:59:59Z",       // 2 BCE
+            "+12024-03-15T10:30:00Z",      // Expanded positive year
         ];
 
         for datetime_str in test_cases {
@@ -1584,7 +1590,7 @@ mod tests {
     fn test_date_validation() {
         let mut dict_builder = DictionaryBuilder::new();
 
-        // DATE should reject invalid RFC 3339 format
+        // DATE should reject invalid ISO 8601 format
         let invalid = Value::Date(Cow::Borrowed("not-a-date"));
         let mut writer = Writer::new();
         assert!(encode_value(&mut writer, &invalid, &mut dict_builder).is_err());
@@ -1619,7 +1625,7 @@ mod tests {
     fn test_datetime_validation() {
         let mut dict_builder = DictionaryBuilder::new();
 
-        // DATETIME should reject invalid RFC 3339 format
+        // DATETIME should reject invalid ISO 8601 format
         let invalid = Value::Datetime(Cow::Borrowed("not-a-datetime"));
         let mut writer = Writer::new();
         assert!(encode_value(&mut writer, &invalid, &mut dict_builder).is_err());

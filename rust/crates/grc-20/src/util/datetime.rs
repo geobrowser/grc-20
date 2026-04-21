@@ -1,9 +1,12 @@
-//! RFC 3339 date/time parsing and formatting utilities.
+//! GRC-20 date/time parsing and formatting utilities.
 //!
-//! Converts between RFC 3339 formatted strings and GRC-20 internal representations:
+//! Converts between GRC-20 temporal strings and internal representations:
 //! - Date: days since Unix epoch (1970-01-01) + offset in minutes
 //! - Time: microseconds since midnight (`time_micros`) + offset in minutes
 //! - Datetime: microseconds since Unix epoch (`epoch_micros`) + offset in minutes
+//!
+//! DATE and DATETIME use ISO 8601 extended forms with astronomical year numbering
+//! and expanded years. TIME keeps the RFC 3339-compatible clock syntax.
 
 
 const MICROSECONDS_PER_SECOND: i64 = 1_000_000;
@@ -11,7 +14,7 @@ const MICROSECONDS_PER_MINUTE: i64 = 60 * MICROSECONDS_PER_SECOND;
 const MICROSECONDS_PER_HOUR: i64 = 60 * MICROSECONDS_PER_MINUTE;
 const MILLISECONDS_PER_DAY: i64 = 24 * 60 * 60 * 1000;
 
-/// Error type for RFC 3339 parsing failures.
+/// Error type for temporal parsing failures.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DateTimeParseError {
     pub message: String,
@@ -142,6 +145,103 @@ fn days_in_month(year: i32, month: u32) -> u32 {
     }
 }
 
+/// Parses a DATE/DATETIME year prefix.
+///
+/// Accepted forms:
+/// - `YYYY` for years 0000..9999
+/// - `+YYYYY...` for positive expanded years
+/// - `-YYYY...` for negative years
+fn parse_calendar_year_prefix(input: &str, context: &str) -> Result<(i32, usize), DateTimeParseError> {
+    let bytes = input.as_bytes();
+    if bytes.is_empty() {
+        return Err(DateTimeParseError {
+            message: format!("Invalid {}: {}", context, input),
+        });
+    }
+
+    let (digit_start, signed) = match bytes[0] {
+        b'+' | b'-' => (1usize, true),
+        _ => (0usize, false),
+    };
+
+    let dash_index = input[digit_start..]
+        .find('-')
+        .map(|idx| idx + digit_start)
+        .ok_or_else(|| DateTimeParseError {
+            message: format!("Invalid {}: {}", context, input),
+        })?;
+
+    let digit_count = dash_index.saturating_sub(digit_start);
+    if digit_count < 4 || (!signed && digit_count != 4) {
+        return Err(DateTimeParseError {
+            message: format!("Invalid year in {}: {}", context, input),
+        });
+    }
+
+    if !input[digit_start..dash_index].chars().all(|c| c.is_ascii_digit()) {
+        return Err(DateTimeParseError {
+            message: format!("Invalid year in {}: {}", context, input),
+        });
+    }
+
+    let year: i32 = input[..dash_index].parse().map_err(|_| DateTimeParseError {
+        message: format!("Invalid year in {}: {}", context, input),
+    })?;
+
+    Ok((year, dash_index))
+}
+
+/// Parses the date prefix in a DATE or DATETIME string.
+fn parse_calendar_date_prefix(
+    input: &str,
+    context: &str,
+) -> Result<(i32, u32, u32, usize), DateTimeParseError> {
+    let (year, first_dash) = parse_calendar_year_prefix(input, context)?;
+
+    if input.len() < first_dash + 6 || input.as_bytes().get(first_dash + 3) != Some(&b'-') {
+        return Err(DateTimeParseError {
+            message: format!("Invalid {}: {}", context, input),
+        });
+    }
+
+    let month: u32 = input[first_dash + 1..first_dash + 3]
+        .parse()
+        .map_err(|_| DateTimeParseError {
+            message: format!("Invalid month in {}: {}", context, input),
+        })?;
+
+    let day: u32 = input[first_dash + 4..first_dash + 6]
+        .parse()
+        .map_err(|_| DateTimeParseError {
+            message: format!("Invalid day in {}: {}", context, input),
+        })?;
+
+    if month < 1 || month > 12 {
+        return Err(DateTimeParseError {
+            message: format!("Invalid month in {}: {}", context, input),
+        });
+    }
+    if day < 1 || day > days_in_month(year, month) {
+        return Err(DateTimeParseError {
+            message: format!("Invalid day in {}: {}", context, input),
+        });
+    }
+
+    Ok((year, month, day, first_dash + 6))
+}
+
+fn format_calendar_year(year: i32) -> String {
+    if (0..=9999).contains(&year) {
+        return format!("{:04}", year);
+    }
+
+    if year < 0 {
+        return format!("-{:04}", i64::from(year).abs());
+    }
+
+    format!("+{:05}", year)
+}
+
 /// Calculates days since Unix epoch for a given date.
 fn date_to_days(year: i32, month: u32, day: u32) -> i32 {
     // Use a well-known algorithm for converting dates to days since epoch
@@ -187,60 +287,20 @@ fn days_to_date(days: i32) -> (i32, u32, u32) {
 // DATE functions
 // =====================
 
-/// Parses an RFC 3339 date string (YYYY-MM-DD with optional timezone) and returns
-/// days since Unix epoch and offset in minutes.
+/// Parses a GRC-20 DATE string and returns days since Unix epoch and offset in minutes.
+///
+/// DATE strings use ISO 8601 extended calendar dates with astronomical year
+/// numbering and expanded years. Examples:
+/// - `2024-03-15`
+/// - `0000-01-01Z`
+/// - `-0001-12-31+05:30`
+/// - `+12024-03-15Z`
 pub fn parse_date_rfc3339(date_str: &str) -> Result<(i32, i16), DateTimeParseError> {
-    // Match YYYY-MM-DD with optional timezone offset
-    let (date_part, offset_str) = if date_str.len() >= 10 {
-        let date = &date_str[..10];
-        let rest = &date_str[10..];
-        if rest.is_empty() {
-            (date, None)
-        } else {
-            (date, Some(rest))
-        }
-    } else {
-        return Err(DateTimeParseError {
-            message: format!("Invalid RFC 3339 date: {}", date_str),
-        });
-    };
-
-    // Validate format: YYYY-MM-DD
-    if date_part.len() != 10
-        || date_part.chars().nth(4) != Some('-')
-        || date_part.chars().nth(7) != Some('-')
-    {
-        return Err(DateTimeParseError {
-            message: format!("Invalid RFC 3339 date: {}", date_str),
-        });
-    }
-
-    let year: i32 = date_part[..4].parse().map_err(|_| DateTimeParseError {
-        message: format!("Invalid year in date: {}", date_str),
-    })?;
-
-    let month: u32 = date_part[5..7].parse().map_err(|_| DateTimeParseError {
-        message: format!("Invalid month in date: {}", date_str),
-    })?;
-
-    let day: u32 = date_part[8..10].parse().map_err(|_| DateTimeParseError {
-        message: format!("Invalid day in date: {}", date_str),
-    })?;
-
-    // Validate month and day
-    if month < 1 || month > 12 {
-        return Err(DateTimeParseError {
-            message: format!("Invalid month in date: {}", date_str),
-        });
-    }
-    if day < 1 || day > days_in_month(year, month) {
-        return Err(DateTimeParseError {
-            message: format!("Invalid day in date: {}", date_str),
-        });
-    }
+    let (year, month, day, date_len) = parse_calendar_date_prefix(date_str, "ISO 8601 date")?;
 
     let days = date_to_days(year, month, day);
-    let offset_min = match offset_str {
+    let offset_min = match date_str.get(date_len..) {
+        Some("") => 0,
         Some(s) => parse_timezone_offset(s)?,
         None => 0,
     };
@@ -248,11 +308,11 @@ pub fn parse_date_rfc3339(date_str: &str) -> Result<(i32, i16), DateTimeParseErr
     Ok((days, offset_min))
 }
 
-/// Formats days since Unix epoch as RFC 3339 date string.
+/// Formats days since Unix epoch as a canonical GRC-20 DATE string.
 pub fn format_date_rfc3339(days: i32, offset_min: i16) -> String {
     let (year, month, day) = days_to_date(days);
     let offset = format_timezone_offset(offset_min);
-    format!("{:04}-{:02}-{:02}{}", year, month, day, offset)
+    format!("{}-{:02}-{:02}{}", format_calendar_year(year), month, day, offset)
 }
 
 // =====================
@@ -374,67 +434,37 @@ pub fn format_time_rfc3339(time_micros: i64, offset_min: i16) -> String {
 // DATETIME functions
 // =====================
 
-/// Parses an RFC 3339 datetime string and returns microseconds since Unix epoch
+/// Parses a GRC-20 DATETIME string and returns microseconds since Unix epoch
 /// and offset in minutes.
 ///
-/// Spec: DATETIME value definition (spec.md "DATETIME" section) requires offset_min;
-/// reject inputs without explicit timezone (Z or ±HH:MM).
+/// DATETIME strings use ISO 8601 extended calendar dates with astronomical year
+/// numbering and expanded years, plus RFC 3339-compatible time and offset syntax.
+/// Examples:
+/// - `2024-03-15T14:30:00Z`
+/// - `0000-01-01T00:00:00Z`
+/// - `-0001-12-31T23:59:59+05:30`
+/// - `+12024-03-15T10:30:00Z`
+///
+/// The offset is required.
 pub fn parse_datetime_rfc3339(datetime_str: &str) -> Result<(i64, i16), DateTimeParseError> {
-    // Minimum length is 19 (YYYY-MM-DDTHH:MM:SS)
-    if datetime_str.len() < 19 {
-        return Err(DateTimeParseError {
-            message: format!("Invalid RFC 3339 datetime: {}", datetime_str),
-        });
-    }
+    let (year, month, day, date_len) =
+        parse_calendar_date_prefix(datetime_str, "ISO 8601 datetime")?;
 
-    // Check for T or space separator
-    let sep = datetime_str.chars().nth(10);
+    let sep = datetime_str.chars().nth(date_len);
     if sep != Some('T') && sep != Some(' ') {
         return Err(DateTimeParseError {
-            message: format!("Invalid RFC 3339 datetime: {}", datetime_str),
-        });
-    }
-
-    // Parse date part
-    let date_part = &datetime_str[..10];
-    if date_part.chars().nth(4) != Some('-') || date_part.chars().nth(7) != Some('-') {
-        return Err(DateTimeParseError {
-            message: format!("Invalid RFC 3339 datetime: {}", datetime_str),
-        });
-    }
-
-    let year: i32 = date_part[..4].parse().map_err(|_| DateTimeParseError {
-        message: format!("Invalid year in datetime: {}", datetime_str),
-    })?;
-
-    let month: u32 = date_part[5..7].parse().map_err(|_| DateTimeParseError {
-        message: format!("Invalid month in datetime: {}", datetime_str),
-    })?;
-
-    let day: u32 = date_part[8..10].parse().map_err(|_| DateTimeParseError {
-        message: format!("Invalid day in datetime: {}", datetime_str),
-    })?;
-
-    // Validate month and day
-    if month < 1 || month > 12 {
-        return Err(DateTimeParseError {
-            message: format!("Invalid month in datetime: {}", datetime_str),
-        });
-    }
-    if day < 1 || day > days_in_month(year, month) {
-        return Err(DateTimeParseError {
-            message: format!("Invalid day in datetime: {}", datetime_str),
+            message: format!("Invalid ISO 8601 datetime: {}", datetime_str),
         });
     }
 
     // Parse time part
-    let time_part = &datetime_str[11..];
+    let time_part = &datetime_str[date_len + 1..];
     if time_part.len() < 8
         || time_part.chars().nth(2) != Some(':')
         || time_part.chars().nth(5) != Some(':')
     {
         return Err(DateTimeParseError {
-            message: format!("Invalid RFC 3339 datetime: {}", datetime_str),
+            message: format!("Invalid ISO 8601 datetime: {}", datetime_str),
         });
     }
 
@@ -518,7 +548,7 @@ pub fn parse_datetime_rfc3339(datetime_str: &str) -> Result<(i64, i16), DateTime
     Ok((epoch_micros, offset_min))
 }
 
-/// Formats microseconds since Unix epoch as RFC 3339 datetime string.
+/// Formats microseconds since Unix epoch as a canonical GRC-20 DATETIME string.
 pub fn format_datetime_rfc3339(epoch_micros: i64, offset_min: i16) -> String {
     // Adjust for timezone offset: local time = UTC + offset
     let offset_us = offset_min as i64 * MICROSECONDS_PER_MINUTE;
@@ -552,8 +582,15 @@ pub fn format_datetime_rfc3339(epoch_micros: i64, offset_min: i16) -> String {
     let offset = format_timezone_offset(offset_min);
 
     format!(
-        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}{}{}",
-        year, month, day, hours, minutes, seconds, frac, offset
+        "{}-{:02}-{:02}T{:02}:{:02}:{:02}{}{}",
+        format_calendar_year(year),
+        month,
+        day,
+        hours,
+        minutes,
+        seconds,
+        frac,
+        offset
     )
 }
 
@@ -583,6 +620,9 @@ mod tests {
     #[test]
     fn test_format_date() {
         assert_eq!(format_date_rfc3339(0, 0), "1970-01-01Z");
+        assert_eq!(format_date_rfc3339(date_to_days(0, 1, 1), 0), "0000-01-01Z");
+        assert_eq!(format_date_rfc3339(date_to_days(-1, 12, 31), 0), "-0001-12-31Z");
+        assert_eq!(format_date_rfc3339(date_to_days(12024, 3, 15), 0), "+12024-03-15Z");
         assert_eq!(format_date_rfc3339(19797, 0), "2024-03-15Z");
         assert_eq!(format_date_rfc3339(19797, 330), "2024-03-15+05:30");
         assert_eq!(format_date_rfc3339(19797, -300), "2024-03-15-05:00");
@@ -595,6 +635,9 @@ mod tests {
             "2024-03-15Z",
             "2024-03-15+05:30",
             "2024-12-31-08:00",
+            "0000-01-01Z",
+            "-0001-12-31Z",
+            "+12024-03-15Z",
             "2000-02-29Z", // leap year
         ];
 
@@ -665,6 +708,12 @@ mod tests {
     #[test]
     fn test_format_datetime() {
         assert_eq!(format_datetime_rfc3339(0, 0), "1970-01-01T00:00:00Z");
+        let (epoch_micros, offset) = parse_datetime_rfc3339("0000-01-01T00:00:00Z").unwrap();
+        assert_eq!(format_datetime_rfc3339(epoch_micros, offset), "0000-01-01T00:00:00Z");
+        let (epoch_micros, offset) = parse_datetime_rfc3339("-0001-12-31T23:59:59Z").unwrap();
+        assert_eq!(format_datetime_rfc3339(epoch_micros, offset), "-0001-12-31T23:59:59Z");
+        let (epoch_micros, offset) = parse_datetime_rfc3339("+12024-03-15T10:30:00Z").unwrap();
+        assert_eq!(format_datetime_rfc3339(epoch_micros, offset), "+12024-03-15T10:30:00Z");
         assert_eq!(
             format_datetime_rfc3339(1710513000000000, 0),
             "2024-03-15T14:30:00Z"
@@ -683,6 +732,9 @@ mod tests {
             "2024-03-15T14:30:00.5Z",
             "2024-03-15T14:30:00.123456Z",
             "2024-12-31T23:59:59.999999Z",
+            "0000-01-01T00:00:00Z",
+            "-0001-12-31T23:59:59Z",
+            "+12024-03-15T10:30:00Z",
         ];
 
         for datetime in datetimes {

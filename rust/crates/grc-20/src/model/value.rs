@@ -152,13 +152,13 @@ pub enum Value<'a> {
     /// Opaque byte array.
     Bytes(Cow<'a, [u8]>),
 
-    /// Calendar date in RFC 3339 format (e.g., "2024-01-15" or "2024-01-15+05:30").
+    /// Calendar date in ISO 8601 extended format (e.g., "2024-01-15Z" or "0000-01-01Z").
     Date(Cow<'a, str>),
 
     /// Time of day in RFC 3339 format (e.g., "14:30:45.123456Z" or "14:30:45+05:30").
     Time(Cow<'a, str>),
 
-    /// Combined date and time in RFC 3339 format (e.g., "2024-01-15T14:30:45.123456Z").
+    /// Combined date and time in ISO 8601 extended format (e.g., "2024-01-15T14:30:45.123456Z" or "+12024-01-15T14:30:45.123456Z").
     Datetime(Cow<'a, str>),
 
     /// RFC 5545 iCalendar schedule string.
@@ -264,7 +264,7 @@ impl Value<'_> {
             }
             Value::Date(s) => {
                 if parse_date_rfc3339(s).is_err() {
-                    return Some("Invalid RFC 3339 date format");
+                    return Some("Invalid ISO 8601 date format");
                 }
             }
             Value::Time(s) => {
@@ -274,7 +274,7 @@ impl Value<'_> {
             }
             Value::Datetime(s) => {
                 if parse_datetime_rfc3339(s).is_err() {
-                    return Some("Invalid RFC 3339 datetime format");
+                    return Some("Invalid ISO 8601 datetime format");
                 }
             }
             Value::Embedding {
